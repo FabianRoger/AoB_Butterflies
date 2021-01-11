@@ -1,0 +1,76 @@
+---
+title: "ÄoB analysis of Butterflydata"
+author: "Fabian Roger"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  github_document:
+    toc: yes
+    toc_depth: 5
+    pandoc_args: --webtex
+  html_document:
+    keep_md: yes
+    theme: readable
+    mathjax: default
+  pdf_document:
+    toc: yes
+
+---
+
+load packages
+
+```{r}
+library(here)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(readxl)
+```
+
+load data
+
+```{r}
+RMO <- read_excel("RMO_combined_data.xlsx", sheet = "all_observations_clean_no_calc", 
+                  col_types = c(
+                    "skip", "text", "text", "numeric", "text",
+                    "text", "numeric", "text", rep("numeric",5),
+                    rep("skip",3), rep("numeric",4),
+                    rep("text",7), rep("skip", 16)),
+                  n_max = 2000
+                  )
+```
+
+
+# Figures
+
+## Artrikedom per inventerat objekt
+
+total species richness and richness of grassland specialist (map)
+
+## Antal individer /art/år
+
+vertical barplot of total number of individuals by species (for all species) 
+
+Q: which year? (Are there several?)
+
+## Enkel jämförelse – antal arter i transekter och slingor 
+
+(obs bara regionala data). Uppdelat transekter och slingor för att kunna jmf de två perioderna?
+
+Histogram of number of species / location, divided between "slingor" and "transektor"
+
+## Biotoptypernas medel artantal + jmf perioderna
+
+Mean N species + CI by biotoptyp
+
+## Biotoptypernas artantal och relativa mängd
+
+Total number of species observed by biotoptyp, coloured sep if redlisted, compared to total area of that biotoptyp
+
+--> double axis chart, needs different visualization
+
+
+
+
+
+
+
