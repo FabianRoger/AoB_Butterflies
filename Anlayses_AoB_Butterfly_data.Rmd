@@ -13,7 +13,6 @@ output:
     mathjax: default
   pdf_document:
     toc: yes
-
 ---
 
 load packages
@@ -67,6 +66,47 @@ Mean N species + CI by biotoptyp
 Total number of species observed by biotoptyp, coloured sep if redlisted, compared to total area of that biotoptyp
 
 --> double axis chart, needs different visualization
+
+## Samband mängd nektarkällor och för artantal och individantal
+
+species abundance vs nectar abundance
+richness vs nectar abundance
+
+(now barplot but prob. better scatterplot)
+
+## Samband vegetationshöjd och  artantal och individantal
+
+same for vegetation height
+
+## Typiska arter för resp biotop (slingssegmenten)
+
+(should we do some multivar anlaysis here to see what species are sign more abundant in certain biotop type?)
+
+## Trend analysis 
+
+Is this dealt with?
+
+## Jmf av artsammansättning mellan länen och de ingående objekten
+
+NMDS (or here CCA) of species composition between 6 län
+
+same for 'lab' (what is lab)
+
+## Jmf artsammansättningen för de olika biotoptyperna (sling segmenten)
+
+same as above for different biotop types
+
+## Vilka parametrar (nektarrikedom, veghöjd…) viktiga för olika arterna?
+
+what env var are important for different species. Vegan correspondance analysis. 
+
+Q: What env variables do we want to include here?
+
+## Potentialen att hysa gräsmarksfjärilsspecialister
+
+--> check R code Spatial for this nad some more spatial analysis
+
+
 
 
 
