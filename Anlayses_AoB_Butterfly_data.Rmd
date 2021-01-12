@@ -25,17 +25,116 @@ library(ggplot2)
 library(readxl)
 ```
 
-load data
+load data and clean data
+
 
 ```{r}
 RMO <- read_excel("RMO_combined_data.xlsx", sheet = "all_observations_clean_no_calc", 
-                  col_types = c(
-                    "skip", "text", "text", "numeric", "text",
-                    "text", "numeric", "text", rep("numeric",5),
-                    rep("skip",3), rep("numeric",4),
-                    rep("text",7), rep("skip", 16)),
-                  n_max = 2000
-                  )
+                  col_types = "text")
+
+Var_RMO <- read_excel("RMO_combined_data.xlsx", sheet = 1)
+
+Var_RMO %>% 
+  filter(Variable %in% colnames(RMO)) %>% 
+  View()
+
+#checking those numeric variables that will be analysed
+
+#count OK
+as.numeric(RMO$count) %>% is.na %>% sum
+
+#segment --> need fixing if necessary (mixed numeric 1,2,.. and text S1, S2, ..)
+RMO[which(is.na(as.numeric(RMO$segment))),"segment"] %>% table()
+
+#biotope --> need fixing. Includes comments ("se anm") and uncertain numeric code ("13/11"). But rel few cases in total (632)
+RMO$biotope[!is.na(RMO$biotope)][which(is.na(as.numeric(RMO$biotope[!is.na(RMO$biotope)])))] %>% table() 
+
+
+#length --> mostly OK. Numeric or missing value. Some text (only 11 cases)
+RMO$length[!is.na(RMO$length)][which(is.na(as.numeric(RMO$length[!is.na(RMO$length)])))]
+
+#perc_veg_0-5 --> needs fixing. Includes comments, symbols ("x") and unrecognized NAs (that are coded as "NA" in raw data)
+RMO$`perc_veg_0-5`[!is.na(RMO$`perc_veg_0-5`)][which(is.na(as.numeric(RMO$`perc_veg_0-5`[!is.na(RMO$`perc_veg_0-5`)])))] %>% 
+  table() 
+
+#perc_veg_5-15 --> needs fixing. Includes comments, symbols ("x") and unrecognized NAs (that are coded as "NA" in raw data)
+RMO$`perc_veg_5-15`[!is.na(RMO$`perc_veg_5-15`)][which(is.na(as.numeric(RMO$`perc_veg_5-15`[!is.na(RMO$`perc_veg_5-15`)])))] %>% table() 
+
+#perc_veg_above_15 --> needs fixing. Includes comments, symbols ("x") and unrecognized NAs (that are coded as "NA" in raw data)
+RMO$`perc_veg_above_15`[!is.na(RMO$`perc_veg_above_15`)][which(is.na(as.numeric(RMO$`perc_veg_above_15`[!is.na(RMO$`perc_veg_above_15`)])))] %>% table() 
+
+#per_mill_flowers --> needs fixing. Includes wrongly formatted numbers, comments and literal "NA" (as text)
+RMO$per_mill_flowers[!is.na(RMO$per_mill_flowers)][which(is.na(as.numeric(RMO$per_mill_flowers[!is.na(RMO$per_mill_flowers)])))] %>% table() 
+
+#perc_vadd_tist_klint --> needs fixing. Includes wrongly formated NAs and comments
+RMO$perc_vadd_tist_klint[!is.na(RMO$perc_vadd_tist_klint)][which(is.na(as.numeric(RMO$perc_vadd_tist_klint[!is.na(RMO$perc_vadd_tist_klint)])))] %>% table() 
+
+#vadd_tist_klint OK
+RMO$vadd_tist_klint %>% unique()
+
+#temp OK
+is.numeric(RMO$temp[!is.na(RMO$temp)]) %>% is.na %>% sum
+
+
+### more variables to be anaylsed ### ???
+
+
+```
+
+To produce the code for the figures I start by just excluding all non-numeric variables.
+
+!!! NEED TO FIX LATER !!!!
+
+```{r}
+RMO <- 
+  RMO %>% 
+  select("site code", "county", "SpeciesText", 
+         "Species ID", "count", "biotope", "length", 
+         "perc_veg_0-5", "perc_veg_5-15", "perc_veg_above_15",
+         "per_mill_flowers", "perc_vadd_tist_klint", "vadd_tist_klint",
+         "temp")
+
+RMO <- RMO %>% 
+  mutate(across(.cols= c("count", "biotope", "length", 
+         "perc_veg_0-5", "perc_veg_5-15", "perc_veg_above_15",
+         "per_mill_flowers", "perc_vadd_tist_klint", "vadd_tist_klint",
+         "temp"), as.numeric))
+
+RMO <- RMO %>% 
+  mutate(county = case_when(
+    county == "M" ~ "Skåne",
+    county == "H" ~ "Kalmar",
+    county == "F" ~ "Jörnköping",
+    county == "E" ~ "Östergötland",
+    county == "T" ~ "Örebro",
+    county == "SLU" ~ NA_character_,
+    TRUE ~ county
+  ))
+
+RMO <- RMO %>% 
+  mutate(biotope = case_when(
+    biotope == 1 ~ "Skogsbryn",
+    biotope == 2 ~ "Vägren",
+    biotope == 3 ~ "Dikesren",
+    biotope == 4 ~ "Hygge",
+    biotope == 5 ~ "Kärr",
+    biotope == 6 ~ "Mosse",
+    biotope == 7 ~ "Vall",
+    biotope == 8 ~ "Trädgårdar",
+    biotope == 9 ~ "Hällmark",
+    biotope == 10 ~ "Sandmark",
+    biotope == 11 ~ "Kraftledning",
+    biotope == 12 ~ "Skogsbryn",
+    biotope == 13 ~ "Skogsbryn",
+    biotope == 14 ~ "Skogsbryn",
+    biotope == 15 ~ "Skogsbryn",
+    biotope == 16 ~ "Skogsbryn",
+    TRUE ~ county
+  ))
+
+
+
+Var_RMO %>% filter(Variable == "biotope") %>% pull(Values)
 ```
 
 
@@ -104,7 +203,7 @@ Q: What env variables do we want to include here?
 
 ## Potentialen att hysa gräsmarksfjärilsspecialister
 
---> check R code Spatial for this nad some more spatial analysis
+--> check R code Spatial for this and some more spatial analysis
 
 
 
