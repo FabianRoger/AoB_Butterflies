@@ -68,12 +68,6 @@ Var_RMO %>%
 RMO_spat <- read_excel("RMO_combined_data_updated.xlsx", sheet = "site_geo")
 ```
 
-## fix spatial Data
-```{r}
-RMO_spat <- st_as_sf(RMO_spat, coords = c("sit_geort9025gonvlon", "sit_geort9025gonvlat")) 
-st_crs(RMO_spat) <- "EPSG:3021"
-```
-
 ## check variables
 
 ### `date`
@@ -325,6 +319,7 @@ RMO %>%
 1) c <- 246
 2) i.u. seems to code for missing (inte undersökt?) --> we code it as NA
 3) for many segments the length is not the same between dates. This is probably genuine as the length then represents the observed length at that date. However, in a few cases the length is given as 335000 which is an impossible value. We replace it by the recorded length on another day
+4) for many segments and transect the length is NA at least at some dates. If the length is always constant, we can impute it. 
 
 ```{r}
 
@@ -358,6 +353,26 @@ left_join(right_len, by = c("SiteID", "segment")) %>%
 #for one segment there is no date with non-impossible length. We set it to NA
 RMO[!is.na(RMO$length) & RMO$length == "335000",]$length <- NA_character_
 
+#4
+
+imputable_length <- 
+RMO %>% 
+  select(date, SiteID, segment, length) %>% 
+  group_by(SiteID, segment) %>% 
+  filter(TRUE %in% is.na(length)) %>%
+  filter(FALSE %in% is.na(length)) %>% 
+  filter(!is.na(length)) %>% 
+  select(-date) %>% 
+  distinct() %>% 
+  group_by(SiteID, segment) %>% 
+  filter(n()==1)
+
+RMO <- 
+RMO %>% 
+left_join(imputable_length, by = c("SiteID", "segment")) %>%  
+  mutate(length = coalesce(length.y, length.x)) %>% 
+  select(-length.y, -length.x) 
+  
 #transform to numeric
 RMO$length <- as.numeric(RMO$length)
 
@@ -766,8 +781,21 @@ RMO %>% select(
   arrange(SiteID, segment, date, SpeciesText)
 ```
 
+## fix spatial Data
+```{r}
+RMO_spat <- st_as_sf(RMO_spat, coords = c("sit_geort9025gonvlon", "sit_geort9025gonvlat")) 
+st_crs(RMO_spat) <- "EPSG:3021"
+
+RMO_spat <- 
+RMO_spat %>% 
+  rename("SiteID" = sit_uid) %>% 
+  select(SiteID, geometry) %>% 
+  mutate(SiteID = as.character(SiteID)) %>% 
+  left_join(., distinct(select(RMO, SiteID, SiteText, SiteType, county, County_text)))
+```
+
 ##export
 ```{r}
-save(RMO, RMO_spat, file = "clean_data.RData")
+save(RMO, RMO_spat, file = "RMO_clean_data.RData")
 ```
 
