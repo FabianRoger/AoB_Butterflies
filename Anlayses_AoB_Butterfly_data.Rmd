@@ -27,6 +27,25 @@ library(readxl)
 
 load data and clean data
 
+Data description:
+
++ Länstyrelsen data (county counts other than SLU)
+
+--> biotop only for Länstyrelsen
+--> Slingor and Transects, analyse separately unless they have length so we can standardise
+
++ SLU data (collected by SLU, location needs to be checked from spatial information)
+
++ from 2009 to 2018 (doublecheck)
+There is differnt periods 9-13 and 14-18, Analyse seperately?
+
+vadd_tist_klint only SLU
+
+Spatial data in sheet 'site_geo'
+
+EPSG:3021
+
+--> get county info from county shapefile and geo-location of routes
 
 ```{r}
 RMO <- read_excel("RMO_combined_data.xlsx", sheet = "all_observations_clean_no_calc", 
@@ -46,12 +65,24 @@ as.numeric(RMO$count) %>% is.na %>% sum
 #segment --> need fixing if necessary (mixed numeric 1,2,.. and text S1, S2, ..)
 RMO[which(is.na(as.numeric(RMO$segment))),"segment"] %>% table()
 
+#S1-17 --> strip "S"
+#S --> 1
+#A-K --> 1-11
+# drop rest
+
 #biotope --> need fixing. Includes comments ("se anm") and uncertain numeric code ("13/11"). But rel few cases in total (632)
 RMO$biotope[!is.na(RMO$biotope)][which(is.na(as.numeric(RMO$biotope[!is.na(RMO$biotope)])))] %>% table() 
 
+#remove all funky habitats
+# check if NAs for Slingor (SiteType == "S) can be imputed
 
 #length --> mostly OK. Numeric or missing value. Some text (only 11 cases)
 RMO$length[!is.na(RMO$length)][which(is.na(as.numeric(RMO$length[!is.na(RMO$length)])))]
+
+# c <- 246
+# i.u. <-  ? 
+# check if length can be imputed from other years
+# for "transect" we have all shape files, for "slingor" not for all
 
 #perc_veg_0-5 --> needs fixing. Includes comments, symbols ("x") and unrecognized NAs (that are coded as "NA" in raw data)
 RMO$`perc_veg_0-5`[!is.na(RMO$`perc_veg_0-5`)][which(is.na(as.numeric(RMO$`perc_veg_0-5`[!is.na(RMO$`perc_veg_0-5`)])))] %>% 
@@ -63,11 +94,21 @@ RMO$`perc_veg_5-15`[!is.na(RMO$`perc_veg_5-15`)][which(is.na(as.numeric(RMO$`per
 #perc_veg_above_15 --> needs fixing. Includes comments, symbols ("x") and unrecognized NAs (that are coded as "NA" in raw data)
 RMO$`perc_veg_above_15`[!is.na(RMO$`perc_veg_above_15`)][which(is.na(as.numeric(RMO$`perc_veg_above_15`[!is.na(RMO$`perc_veg_above_15`)])))] %>% table() 
 
+# should only be present in transects and should ideally sum to 100% between three size classes
+# NAs might be 0 if other categories sum to 100
+# x's are likely 100 if no x in other categories
+
 #per_mill_flowers --> needs fixing. Includes wrongly formatted numbers, comments and literal "NA" (as text)
 RMO$per_mill_flowers[!is.na(RMO$per_mill_flowers)][which(is.na(as.numeric(RMO$per_mill_flowers[!is.na(RMO$per_mill_flowers)])))] %>% table() 
 
+#,0,05 -> 5%?
+# <X -> truncate to X
+# mean of range
+
 #perc_vadd_tist_klint --> needs fixing. Includes wrongly formated NAs and comments
 RMO$perc_vadd_tist_klint[!is.na(RMO$perc_vadd_tist_klint)][which(is.na(as.numeric(RMO$perc_vadd_tist_klint[!is.na(RMO$perc_vadd_tist_klint)])))] %>% table() 
+
+#exclude
 
 #vadd_tist_klint OK
 RMO$vadd_tist_klint %>% unique()
@@ -75,9 +116,16 @@ RMO$vadd_tist_klint %>% unique()
 #temp OK
 is.numeric(RMO$temp[!is.na(RMO$temp)]) %>% is.na %>% sum
 
-
 ### more variables to be anaylsed ### ???
 
+# HavdStatus
+RMO$HavdStatus[!is.na(RMO$HavdStatus) & !grepl("NA", RMO$HavdStatus)] %>% table
+
+# HavdNotkreatur
+
+# HavdFar
+
+# HavdHast
 
 ```
 
@@ -134,15 +182,23 @@ RMO <- RMO %>%
 
 
 
-Var_RMO %>% filter(Variable == "biotope") %>% pull(Values)
+
+RMO %>% filter(county == "SLU")
+
+
 ```
 
 
 # Figures
 
+check Analysfrågar svar final for how to analyse
+
 ## Artrikedom per inventerat objekt
 
 total species richness and richness of grassland specialist (map)
+
+separately between slingor and transects --> check methods previous report 
+seperatly between periods 
 
 ## Antal individer /art/år
 
