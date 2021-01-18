@@ -1,0 +1,773 @@
+---
+title: "Import and data cleanup"
+author: "Fabian Roger"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  github_document:
+    toc: yes
+    toc_depth: 5
+    pandoc_args: --webtex
+  html_document:
+    keep_md: yes
+    theme: readable
+    mathjax: default
+  pdf_document:
+    toc: yes
+---
+
+load packages
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(readxl)
+library(sf)
+library(lubridate)
+```
+
+
+
+## Data description:
+
++ Länstyrelsen data (county codes other than SLU)
+
+--> biotop only for Länstyrelsen
+--> Slingor and Transects, analyse separately unless they have length so we can standardise (see description of wanted analysis)
+
++ SLU data (collected by SLU)
+
++ from 2009 to 2018 (doublecheck)
+There is different periods 9-13 and 14-18, Analyse separately?
+
+`vadd_tist_klint` only SLU
+
+Spatial data in sheet 'site_geo' EPSG:3021
+
+--> get county info for SLU data from county shapefile and geo-location of routes
+
+Work with Species ID and check for consistent coding
+SiteID and Site type --> no gaps, unique ID
+
+## loading the data
+
+We cannot load the data directly as we need to fix them to have a single type per column. 
+We therefore import the data as text 
+```{r}
+#data
+RMO <- read_excel("RMO_combined_data_updated.xlsx", sheet = "all_observations_clean_no_calc", 
+                  col_types = "text")
+
+#variable description
+Var_RMO <- read_excel("RMO_combined_data_updated.xlsx", sheet = 1)
+
+Var_RMO %>%
+  filter(Variable %in% colnames(RMO)) %>%
+  View(., title = "Variables")
+
+#spatial data
+RMO_spat <- read_excel("RMO_combined_data_updated.xlsx", sheet = "site_geo")
+```
+
+## fix spatial Data
+```{r}
+RMO_spat <- st_as_sf(RMO_spat, coords = c("sit_geort9025gonvlon", "sit_geort9025gonvlat")) 
+st_crs(RMO_spat) <- "EPSG:3021"
+```
+
+## check variables
+
+### `date`
+
+date has been imported as serial number (and transformed to character)
+
+However some dates are still in character date format 
+
+```{r}
+# these date have not been imported as numeric (not sure why)
+RMO$date[is.na(as.numeric(RMO$date))] %>%
+  table()
+```
+
+```{r}
+# all but 2 follow the %Y-%m-%d format
+RMO$date[is.na(as.numeric(RMO$date))] %>%
+  unique() %>% 
+  as.Date(., format = "%Y-%m-%d")
+```
+
+1) 2010-20-08 --> probably %Y-%d-%m, replace by 2010-08-20 before transformation
+
+2) 2018-06-31 --> impossible date, replace by 2018-07-01
+
+3) transform all character 
+
+4) transform excel dates
+
+
+```{r}
+#1
+RMO$date[RMO$date == "2010-20-08"] <- "2010-08-20"
+
+#2
+RMO$date[RMO$date == "2018-06-31"] <- "2018-07-01"
+
+## OBS !! different origin for mac and windows excel !! ###
+## from ?as.Date:
+## Excel is said to use 1900-01-01 as day 1 (Windows default) or
+## 1904-01-01 as day 0 (Mac default)
+
+## it seems like the origin here is "1899-12-30"
+
+#3 & #4
+RMO <- 
+RMO %>% 
+  mutate(date = case_when(is.na(as.numeric(date)) ~ as.Date(date, format = "%Y-%m-%d"),
+                          TRUE ~ as.Date(as.numeric(date), origin = "1899-12-30"))) 
+
+```
+
+### `count`
+
+no problems 
+
+```{r}
+as.numeric(RMO$count) %>% is.na %>% sum
+```
+
+```{r}
+RMO$count <- as.numeric(RMO$count)
+```
+
+### `county`
+
+```{r}
+
+RMO$county %>% table()
+RMO$CountyCode %>% table()
+
+```
+
+`county` contains letter codes for the counties (Länstyrelsen) and 'SLU' if the data have been recorded by SLU
+`CountyCode` contains number code for counties, including for SLU
+
+I add a variable `County_text` with the names of the counties based on the number code
+
+```{r}
+
+County_names <- 
+Var_RMO %>% 
+  filter(Variable == "CountyCode") %>% 
+  pull(Values) %>% 
+  strsplit(",") %>% 
+  unlist() %>% 
+  tibble(var = .) %>% 
+  separate(var, into = c("CountyCode", "County_text"), sep = "=") %>% 
+  mutate(CountyCode = stringr::str_trim(CountyCode)) 
+  
+
+RMO <- RMO %>% 
+  left_join(County_names)
+
+```
+
+### `segment``
+
+```{r}
+RMO[which(is.na(as.numeric(RMO$segment))),"segment"] %>% table()
+```
+
+1) S1-17 --> strip "S"
+2) S --> 1
+3) A-K --> 1-11
+4) drop rest
+
+```{r}
+#1
+RMO$segment[grepl("S", RMO$segment)] <- gsub("S(\\d+)", "\\1", RMO$segment[grepl("S", RMO$segment)]) 
+
+#2
+RMO$segment[RMO$segment == "S"] <- 1
+
+#3
+Let_coded <- RMO$segment[grepl(paste0(LETTERS[1:11], collapse = "|"), RMO$segment)]
+RMO$segment[grepl(paste0(LETTERS[1:11], collapse = "|"), RMO$segment)] <-  match(Let_coded, LETTERS)
+
+#4
+RMO[which(is.na(as.numeric(RMO$segment))),"segment"] <- NA_character_
+
+#transform
+RMO$segment <- as.numeric(RMO$segment)
+```
+
+### `biotope`
+
+```{r}
+RMO$biotope[!is.na(RMO$biotope)][which(is.na(as.numeric(RMO$biotope[!is.na(RMO$biotope)])))] %>% table() 
+```
+
+1) remove all entries where habitat is not uniquely identified
+
+2) check if NAs for Slingor (SiteType == "S) can be imputed (Transect do generally not have habitat information, but 14 transect sites seem to have it anyway)
+
+
+```{r}
+#1
+RMO$biotope[!is.na(RMO$biotope)][which(is.na(as.numeric(RMO$biotope[!is.na(RMO$biotope)])))] <- NA_character_
+
+#get table for code - name translation
+biotope_names <- 
+Var_RMO %>% 
+  filter(Variable == "biotope") %>% 
+  pull(Values) %>% 
+  strsplit(",") %>% 
+  unlist() %>% 
+  tibble(var = .) %>% 
+  separate(var, into = c("biotope", "biotope_text"), sep = "=") %>% 
+  mutate(biotope = stringr::str_trim(biotope),
+         biotope_text = stringr::str_trim(biotope_text)) %>% 
+  mutate(biotope_text = case_when(biotope == "16" ~ "Övriga",
+                                  TRUE ~ biotope_text))
+
+# add biotope_names to RMO
+RMO <- 
+left_join(RMO, biotope_names)
+
+#check if biotopes are consistent accross repeated entries
+RMO %>% 
+  filter(SiteType == "S") %>% 
+  filter(!is.na(biotope_text)) %>% 
+  select(SiteID, segment, biotope_text, date) %>%
+  mutate(date = year(date)) %>% 
+  distinct() %>% 
+  group_by(SiteID, segment, date) %>% 
+  mutate(n_bio = length(unique(biotope_text))) %>% 
+  filter(n_bio > 1) %>% 
+  #group_by(SiteID, segment, date) %>% 
+  #filter(n() == 1 ) %>% 
+  arrange(SiteID, segment, date) %>% 
+  mutate(biotope_text = paste(biotope_text, " (", date, ")", sep = "")) %>% 
+  group_by(SiteID, segment, date) %>% 
+  mutate(year = paste("case", 1:n())) %>% 
+  select(-n_bio) %>% 
+  pivot_wider(names_from = year, values_from = biotope_text) %>% 
+  inner_join(distinct(select(RMO, SiteText, SiteID))) %>% 
+  relocate("SiteText", .before = "SiteID") %>% View(., "biotopes") 
+  #write.table("Segments_biotope_conflicts_same_year.txt", sep = "\t", row.names = FALSE)
+```
+
+
+
+```{r}
+# some biotope types can be imputed 
+impute_bio <- 
+RMO %>% 
+  filter(SiteType == "S") %>% 
+  select(SiteID, segment, date, biotope) %>% 
+  distinct() %>% 
+  group_by(SiteID, segment) %>% 
+  filter(TRUE %in% is.na(biotope)) %>% 
+  filter(!all(is.na(biotope))) %>% 
+  arrange(SiteID, segment, date) 
+
+#not all are uniquely identified, we only impute those that are so
+bio_not_same <- 
+impute_bio %>% 
+  filter(!is.na(biotope)) %>% 
+  group_by(SiteID, segment) %>% 
+  filter(length(unique(biotope)) > 1)
+
+bio_not_same
+
+bio_same <- 
+  impute_bio %>% 
+  filter(!is.na(biotope)) %>% 
+  group_by(SiteID, segment) %>% 
+  filter(length(unique(biotope)) == 1) %>% 
+  select(-date) %>% 
+  distinct()
+
+#impute
+RMO <- 
+left_join(RMO, bio_same, by = c("SiteID", "segment")) %>% 
+  mutate(biotope = coalesce(biotope.y, biotope.x)) %>%
+  select(-biotope.y, -biotope.x)
+```
+
+### `length`
+
+```{r}
+RMO$length[!is.na(RMO$length)][which(is.na(as.numeric(RMO$length[!is.na(RMO$length)])))]
+```
+
+```{r}
+RMO %>% 
+  select(SiteID, segment, length, date) %>%
+  filter(!is.na(length)) %>% 
+  group_by(SiteID, segment, length) %>% 
+  mutate(n = n()) %>% 
+  select(-date) %>% 
+  distinct() %>% 
+  group_by(SiteID, segment) %>%  
+  filter(n() > 1) %>% 
+  arrange(SiteID, segment) %>% 
+  mutate(length = paste(length, " (", n, ")", sep = "")) %>% 
+  select(-n) %>% 
+  mutate(n_l = 1:n()) %>% 
+  pivot_wider(names_from = n_l, values_from = length) %>% 
+  inner_join(distinct(select(RMO, SiteText, SiteID))) %>% 
+  relocate("SiteText", .before = "SiteID") #%>% 
+  #write.table("Segments_length_conflicts.txt", sep = "\t", row.names = FALSE)
+  
+```
+
+
+
+1) c <- 246
+2) i.u. seems to code for missing (inte undersökt?) --> we code it as NA
+3) for many segments the length is not the same between dates. This is probably genuine as the length then represents the observed length at that date. However, in a few cases the length is given as 335000 which is an impossible value. We replace it by the recorded length on another day
+
+```{r}
+
+#1
+RMO %>% 
+  filter(SiteID == RMO[!is.na(RMO$length) & RMO$length == "c",]$SiteID,
+         segment == RMO[!is.na(RMO$length) & RMO$length == "c",]$segment) %>% 
+  select(SiteID, segment, date, length)
+
+RMO$length[!is.na(RMO$length) & RMO$length == "c"] <- "246"
+
+#2
+RMO$length[!is.na(RMO$length) & RMO$length == "i.u"] <- NA_character_
+
+#3
+right_len <- 
+RMO %>% 
+  filter(SiteID %in% RMO[!is.na(RMO$length) & RMO$length == "335000",]$SiteID) %>% 
+  select(SiteID, segment, date, length) %>% 
+  distinct() %>% 
+  arrange(SiteID, segment, date) %>% 
+  group_by(SiteID, segment) %>% 
+  summarise(length = unique(length)) %>% 
+  filter(length != "335000") 
+
+RMO <- RMO %>% 
+left_join(right_len, by = c("SiteID", "segment")) %>%  
+  mutate(length = coalesce(length.y, length.x)) %>% 
+  select(-length.y, -length.x)
+
+#for one segment there is no date with non-impossible length. We set it to NA
+RMO[!is.na(RMO$length) & RMO$length == "335000",]$length <- NA_character_
+
+#transform to numeric
+RMO$length <- as.numeric(RMO$length)
+
+```
+
+
+### `perc_veg_X` 
+
+```{r}
+#perc_veg_0-5 --> needs fixing. Includes comments, symbols ("x") and unrecognized NAs (that are coded as "NA" in raw data)
+RMO$`perc_veg_0-5`[!is.na(RMO$`perc_veg_0-5`)][which(is.na(as.numeric(RMO$`perc_veg_0-5`[!is.na(RMO$`perc_veg_0-5`)])))] %>% 
+  table() 
+
+#perc_veg_5-15 --> needs fixing. Includes comments, symbols ("x") and unrecognized NAs (that are coded as "NA" in raw data)
+RMO$`perc_veg_5-15`[!is.na(RMO$`perc_veg_5-15`)][which(is.na(as.numeric(RMO$`perc_veg_5-15`[!is.na(RMO$`perc_veg_5-15`)])))] %>% table() 
+
+#perc_veg_above_15 --> needs fixing. Includes comments, symbols ("x") and unrecognized NAs (that are coded as "NA" in raw data)
+RMO$`perc_veg_above_15`[!is.na(RMO$`perc_veg_above_15`)][which(is.na(as.numeric(RMO$`perc_veg_above_15`[!is.na(RMO$`perc_veg_above_15`)])))] %>% table() 
+
+# should only be present in transects and should ideally sum to 100% between three size classes
+# NAs might be 0 if other categories sum to 100
+# x's are likely 100 if no x in other categories
+```
+
+```{r}
+not_100 <- 
+RMO %>% 
+  filter(SiteType == "T") %>% #only trnasects should have cover data
+  select(SiteID,SiteType, segment, date, starts_with("perc_veg")) %>% 
+  distinct() %>% 
+  rowwise() %>% 
+  mutate(perc_veg_100 = sum(as.numeric(c_across(starts_with("perc_veg"))), na.rm = T)) %>% 
+  suppressWarnings() %>% 
+  filter(perc_veg_100 != 100) %>% 
+  distinct() 
+
+# for about 14% of the Site x segment x dates combinations, the perc vegetation does not add up to 100
+paste("percentage of Site x segment x dates combination were sum(% veg) is not 100: ", nrow(not_100)/17757*100)
+
+#over 100
+not_100 %>% 
+  filter(perc_veg_100 > 100) %>% 
+  nrow(.) %>% 
+  paste("over_100:", .)
+
+#over 110
+not_100 %>% 
+  filter(perc_veg_100 > 110) %>% 
+  nrow(.) %>% 
+  paste("over_110:", .)
+
+#all NA
+not_100 %>% 
+  select(-perc_veg_100) %>% 
+  filter(sum(is.na(c_across(starts_with("perc_veg")))) == 3) %>% 
+  nrow() %>% 
+  paste("allNA:", .)
+
+#coded as x
+not_100 %>% 
+  filter(`perc_veg_0-5` %in% c("x", "X") | `perc_veg_5-15`  %in% c("x", "X") | `perc_veg_above_15`  %in% c("x", "X")) %>% 
+  nrow() %>% 
+  paste("coded as X:", .)
+
+#less than 100
+not_100 %>% 
+  filter(perc_veg_100 > 0 & perc_veg_100 < 100) %>% 
+  nrow() %>% 
+  paste("less than 100", .)
+
+print("other problems: ")
+
+#other problems
+not_100 %>% 
+  filter(perc_veg_100 == 0) %>% 
+  select(-perc_veg_100) %>% 
+  rowwise() %>% 
+  filter(sum(is.na(c_across(starts_with("perc_veg")))) < 3) %>%  #not all 3 NA
+  filter(all(is.na(match(c("x", "X") ,c(`perc_veg_0-5`, `perc_veg_5-15`, `perc_veg_above_15`))))) %>% 
+  pull(`perc_veg_0-5`) %>% table() 
+```
+Only transects should have data on vegetation cover. Most have, but there are problems:
+
+1) not all cover add to 100. This could be genuine as the observers can count other surfaces.
+2) some cover adds to >100 --> chack manually
+3) 0s are coded as NA's in some cases --> we code all NAs in rows with data as 0s
+4) some sites record what veg is present (with "x") --> we replace it by 100%
+5) some NAs are coded as character "NA" --> make real NA
+6) for some it says "Behöver datajustering"
+7) for the remaining cases were the sum is over 110 we set the entries to NA. For sum ≤ 110 we assume rounding errors and keep the number
+8) the variable names `perc_veg_0-5` and `perc_veg_5-15` contain "-" which is a problematic character. I rename them to `perc_veg_0_5` and `perc_veg_5_15`
+
+```{r}
+RMO <- 
+RMO %>% 
+  rename("perc_veg_0_5" = `perc_veg_0-5`,
+         "perc_veg_5_15" = `perc_veg_5-15`)
+
+#get unique entries to check and fix
+RMO_T <- 
+  RMO %>% 
+  filter(SiteType == "T") %>% #only trnasects should have cover data
+  select(SiteID, SiteType, segment, date, starts_with("perc_veg")) %>% 
+  distinct %>% 
+  group_by(SiteID, SiteType, segment, date) %>% 
+  filter(n() > 1) %>% 
+  arrange(SiteID, SiteType, segment, date)
+
+RMO_T %>% 
+  group_by()
+
+#5) 
+RMO_T <- 
+  RMO_T %>% 
+  mutate(across(starts_with("perc_veg"), ~case_when(.x == "NA" ~ NA_character_,
+                                                    TRUE ~ .x)))
+#4)
+RMO_T <- 
+  RMO_T %>% 
+  mutate(across(starts_with("perc_veg"), ~case_when(.x %in% c("x", "X") ~ "100",
+                                                    TRUE ~ .x)))
+
+#3)
+RMO_T <- 
+RMO_T %>% 
+  rowwise() %>% 
+  mutate(across(starts_with("perc_veg"), 
+                ~case_when(is.na(.x) & sum(is.na(as.numeric(
+                    c_across(starts_with(
+                      "perc_veg"))))) <3 ~ "0",
+                  TRUE ~ .x))) %>% 
+  suppressWarnings()
+
+#6)
+RMO_T <- 
+  RMO_T %>% 
+  mutate(across(starts_with("perc_veg"), ~case_when(.x == "Behöver datajustering" ~ NA_character_,
+                                                    TRUE ~ .x)))
+#7)
+RMO_T <- 
+  RMO_T %>% 
+  mutate(across(starts_with("perc_veg"), ~case_when(
+    sum(
+      as.numeric(
+        c_across(
+          starts_with("perc_veg")))) > 110 ~ NA_character_,
+    TRUE ~ .x)))
+
+#convert to numeric 
+RMO_T <- 
+  RMO_T %>% 
+  mutate(across(starts_with("perc_veg"), as.numeric))
+
+
+#replace in #RMO
+RMO <- 
+  RMO %>% 
+  select(!starts_with("perc_veg")) %>% 
+  left_join(RMO_T)
+
+#export sites with veg > 100% for manual check
+RMO %>% 
+  rowwise() %>% 
+  select(SiteID, SiteText, SiteType, segment, date, starts_with("perc_veg")) %>% 
+  distinct() %>% 
+  mutate(sum_perc = sum(c_across(starts_with("perc_veg")))) %>% 
+  filter(sum_perc > 100) %>% 
+  filter(sum_perc > 105) %>% 
+  arrange(desc(sum_perc)) #%>% 
+  write.table("veg_over_100.txt", sep = "\t", row.names = FALSE)
+  
+RMO %>% 
+  ungroup() %>% 
+  mutate(rowID = 1:n()) %>% 
+  filter(grepl("Djurgården transekter", SiteText)) %>% 
+  filter(segment == 2) %>%  
+  filter(date == ymd("2016-06-02")) %>% 
+  select(rowID, SiteID, segment, date, starts_with("perc_veg")) %>% 
+  arrange(rowID)
+
+RMO %>% 
+  mutate(rowID = 1:n()) %>% 
+  select(!starts_with("perc_veg")) %>% 
+  left_join(RMO_T) %>% 
+  group_by(rowID) %>% 
+  filter(n() > 1)
+
+```
+
+
+### `per_mill_flowers`
+
+```{r}
+#per_mill_flowers --> needs fixing. Includes wrongly formatted numbers, comments and literal "NA" (as text)
+RMO$per_mill_flowers[!is.na(RMO$per_mill_flowers)][which(is.na(as.numeric(RMO$per_mill_flowers[!is.na(RMO$per_mill_flowers)])))] %>% table() 
+```
+
+1) ,0,05 -> 5%
+2) <X -> truncate to X (i.e. strip away "<" or "≤")
+3) range (i.e. 15-30) -> replace by mean of range
+4) "Behöver datajustering" --> NA
+5) "NA" --> NA
+
+```{r}
+# 1)
+RMO_flow <- 
+RMO %>% 
+  select(SiteID, SiteType, segment, date, per_mill_flowers) %>% 
+  distinct() %>% 
+  rowwise() %>% 
+  mutate(per_mill_flowers = 
+           case_when(per_mill_flowers == ",0,05" ~ "5", #1)
+                   grepl("<", per_mill_flowers) ~ gsub("<(\\d)", "\\1", per_mill_flowers), #2)
+                   grepl("≤", per_mill_flowers) ~ gsub("≤(\\d)", "\\1", per_mill_flowers), #2)
+                   per_mill_flowers == "Behöver datajustering" ~ NA_character_, #4)
+                   per_mill_flowers == "NA" ~ NA_character_, #5)
+                   grepl("-", per_mill_flowers) ~ as.character(mean(as.numeric(strsplit(per_mill_flowers, "-")[[1]]))), #3)
+                   TRUE ~ per_mill_flowers)) %>% 
+  suppressWarnings() %>% 
+  mutate(per_mill_flowers = as.numeric(per_mill_flowers)) #convert to numeric
+
+#replace fixed data in original dataframe
+RMO <- 
+  RMO %>% 
+  select(-per_mill_flowers) %>% 
+  left_join(RMO_flow)
+                   
+```
+
+
+### `perc_vadd_tist_klint`
+
+```{r}
+#perc_vadd_tist_klint --> needs fixing. Includes wrongly formated NAs and comments
+RMO$perc_vadd_tist_klint[!is.na(RMO$perc_vadd_tist_klint)][which(is.na(as.numeric(RMO$perc_vadd_tist_klint[!is.na(RMO$perc_vadd_tist_klint)])))] %>% table() 
+```
+
+1) we exclude all non-numeric characters
+
+```{r}
+RMO <- 
+RMO %>% 
+  mutate(perc_vadd_tist_klint = as.numeric(perc_vadd_tist_klint)) #will automatically convert all non-numeric charatcers to NA
+```
+
+
+### `vadd_tist_klint`
+
+TRUE / FALSE /NA. No problems
+```{r}
+#vadd_tist_klint OK
+RMO$vadd_tist_klint %>% unique()
+```
+
+### `temp`
+
+numeric or NA, no problem
+```{r}
+#temp OK
+is.numeric(RMO$temp[!is.na(RMO$temp)]) %>% is.na %>% sum
+```
+
+### `HavdStatus`
+
+1) some NAs are coded as literal NAs ("NA")
+
+```{r}
+RMO$HavdStatus[!is.na(RMO$HavdStatus)] %>% table
+```
+
+```{r}
+RMO$HavdStatus[!is.na(RMO$HavdStatus) & grepl("NA", RMO$HavdStatus)] <- NA_character_
+```
+
+
+### `Havd_X_kreatur`
+```{r}
+# HavdNotkreatur
+RMO$HavdNotkreatur[!is.na(RMO$HavdNotkreatur)] %>% table
+# HavdFar
+RMO$HavdFar[!is.na(RMO$HavdFar)] %>% table
+# HavdHast
+RMO$HavdHast[!is.na(RMO$HavdHast)] %>% table
+```
+
+1) some NAs are coded as literal NAs ("NA")
+2) the coding differs between Länstyrelsen and SLU: Länstyrelsen record the number of animals whereas SLU records only p/a
+
+However it is not possible to relate the animal number to an area, wherefore the information is not that usefull. 
+
+### `SpeciesText`
+
+1) SpeciesText Liten bastardsvärmare should be changed to Mindre bastardsvärmare, SpeciesID=5
+2) SpeciesText Obestämd P. argus should be changed to Ljungblåvinge/Hedblåvinge, SpeciesID=131
+
+3) There are different versions of SpeciesText for the same Species ID (usually first letter capitalized or not). I Keep the  version with the capitalized fist name and change the other names accordingly
+
+4) The `Species ID` variable contains a space. I replace it by `SpeciesID`
+
+```{r}
+# 4)
+RMO <- 
+  RMO %>% 
+  rename("SpeciesID" = `Species ID`)
+
+#unique SpeciesID to SpeciesText
+
+Species_ID <- 
+RMO %>% 
+  mutate(SpeciesID = case_when(SpeciesText == "Obestämd P. argus" ~ "131",
+                                  SpeciesText == "Liten bastardsvärmare" ~ "5",
+                                  TRUE ~ SpeciesID)) %>% 
+  select(SpeciesID, SpeciesText) %>% 
+  distinct() %>% 
+  #group_by(SpeciesText) %>%      #check if there are NAs in Speciescode for some species names
+  #filter(TRUE %in% is.na(SpeciesID))
+  group_by(SpeciesID) %>% 
+  slice(1) %>% # keep capitalized species name 
+  filter(!is.na(SpeciesID)) %>% #does exclude Svävdagsvärmare (no ID)
+  arrange(as.numeric(SpeciesID)) %>% 
+  mutate(SpeciesText = stringr::str_to_sentence(SpeciesText)) 
+
+#replace SpeciesText with unique and corrected names
+RMO <- 
+RMO %>% 
+  select(-SpeciesText) %>% 
+  left_join(Species_ID) 
+```
+
+##incorrect observations
+
+From [GitHub](https://github.com/FabianRoger/AoB_Butterflies/issues/3#issue-784563483):
+
+incorrect observations that should be filtered out
+
+```{r}
+
+LL <- list(
+  data.frame(t(c("Alkonblåvinge","T",3))),
+  data.frame(t(c("Alkonblåvinge","F",3))),
+  data.frame(t(c("Asknätfjäril","F",1))),
+  data.frame(t(c("Blomvisslare","all",6))),
+  data.frame(t(c("Brun gräsfjäril","E",2))),
+  data.frame(t(c("Ekspinnare","all",1))),
+  data.frame(t(c("Fetörtsblåvinge","all",4))),
+  data.frame(t(c("Gullvivefjäril","T",6))),
+  data.frame(t(c("Gullvivefjäril","F",6))),
+  data.frame(t(c("Friggas pärlemorfjäril","T",2))),
+  data.frame(t(c("Friggas pärlemorfjäril","F",2))),
+  data.frame(t(c("Grönfläckig vitfjäril","all",30))),
+  data.frame(t(c("Krattsnabbvinge","T",4))),
+  data.frame(t(c("Kronärtsblåvinge","SLU",1))),
+  data.frame(t(c("Ljusgul höfjäril","M",3))),
+  data.frame(t(c("Ljusgul höfjäril","T",3))),
+  data.frame(t(c("Turkos blåvinge","all",2))),
+  data.frame(t(c("Violett guldvinge","all",16))),
+  data.frame(t(c("Väpplingblåvinge","T",2))),
+  data.frame(t(c("Mnemosynefjäril","E",1)))) 
+
+LL <- 
+  bind_rows(LL) %>% 
+  mutate()
+  
+LL_all <- 
+LL %>% 
+  mutate(X1 = as.character(X1)) %>% 
+  filter(X2 == "all") %>% 
+  slice(rep(1:n(), each = length(unique(RMO$CountyCode)))) %>% 
+  mutate(X2 = rep(unique(RMO$CountyCode), nrow(filter(LL, X2 == "all")))) %>% 
+  rbind(c("Kartfjäril", "14", 2)) %>% 
+  rbind(c("Midsommarblåvinge", "1", 2)) %>% 
+  select(-X3) %>% 
+  setNames(., c("SpeciesText", "CountyCode"))
+  
+
+Exclude_spec <- 
+  LL %>% 
+  filter(X2 != "all") %>% 
+  rename("county" = X2) %>% 
+  left_join(distinct(select(RMO, county, CountyCode))) %>% 
+  select(X1, CountyCode) %>% 
+  rename("SpeciesText" = X1) %>% 
+  rbind(., LL_all)
+
+#exclude a total of 92 observations
+RMO <- 
+RMO %>% 
+anti_join(.,Exclude_spec) 
+
+```
+
+## select variables
+```{r}
+
+RMO <- 
+RMO %>% select(
+  "date", "site code", "SiteText", "SiteID", "SiteType",
+  "segment","length",
+  "county", "CountyCode", "County_text", "biotope", "biotope_text",
+  "perc_veg_0_5", "perc_veg_5_15", "perc_veg_above_15",
+  "per_mill_flowers", "perc_vadd_tist_klint", "vadd_tist_klint",
+  "HavdStatus", "HavdNotkreatur", "HavdFar", "HavdHast",
+  "temp",
+  "SpeciesID","SpeciesText",
+  "count") %>% 
+  arrange(SiteID, segment, date, SpeciesText)
+```
+
+##export
+```{r}
+save(RMO, RMO_spat, file = "clean_data.RData")
+```
+
