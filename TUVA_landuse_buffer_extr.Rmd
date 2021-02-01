@@ -3,6 +3,11 @@ title: "TUVA landuse"
 output: html_notebook
 ---
 
+OBS: 
+
+The script is parallelized and takes several hours to run, even with >20 cores. 
+
+
 Script to extract the landuse around TUVA objects used in the butterfly monitoring 
 
 We extract the landuse from the NMD
