@@ -1,0 +1,244 @@
+---
+title: "TUVA landuse"
+output: html_notebook
+---
+
+Script to extract the landuse around TUVA objects used in the butterfly monitoring 
+
+We extract the landuse from the NMD
+
+```{r}
+library(sf)
+library(raster)
+library(dplyr)
+library(ggplot2)
+library(pbapply)
+library(purrr)
+library(furrr)
+library(here)
+```
+
+# Data description 
+
+## NMD data
+
+Here we use the new Swedish NMD data (Nationella Marktäckedata - NMD, Naturvårdsverket) to extract the habitat types around the bird monitoring routes. 
+
+The NMD data have been released in 2019. They are open (CC0 licens) and free. 
+
+The can be downloaded from [here](https://metadatakatalogen.naturvardsverket.se/metadatakatalogen/GetMetaDataById?id=8853721d-a466-4c01-afcc-9eae57b17b39)
+
+
++ Resolution : 10 x 10 m
++ combination of Satellite data (**Sentinel 2A/2B**) + laser scanning (**LIDAR** from airplane) + existing maps 
++ 25 land-use classes in 3 hierarchical levels + additional classes in extra layers
++ additional information is stored as attributes
++ data are from 2009-2018 (LIDAR) and 2015-2018 (Sentinel). 
+
+Forest class
+
++ 7 classes
++ good differentiation of broad leaf forest and coniferous forest
++ good differentiation between Pine and Spruce forest
++ mixed class 'barrblandskog' (coniferous forest) is of ok quality, can be confounded with either pure pine or pure Spruce
++ mixed class 'Lövblandad barrskog' (Deciduous coniferous forest) is of ok quality. However a lot of the forest in this category will grow up to become pure coniferous forest
++ mixed class 'triviallövskog med ädellövinslag' (trivial broad leave with mixture parts of oak or book etc) is error prone class
++ old forests have better classification than young forest
++ sparse forests and small tree groups / single trees can't be trusted in their classification
++ In pure deciduous forest, if the LIDAR picture has been taken before the blossom of the leaves, the prct forest can be underestimated. 
+
+Open wetlands
+
++ in general good quality data
++ can overestimate wetland on grassland, especially if it was former agricultural land  
+
+Agricultural land
+
++ data come from blockdatabase + time series of satellite data within the land which is classified as Agricultural land by Lantmäteriet 
++ if not enough pictures are present of a time-series, agricultural fields can be missed
++ Agricultural land with a vegetation height of > 5m can be classified as forest (energyplants, christmass trees, fruit tree plantations)
+
+Other open landscape
+
++ subclasses with and without vegetation
++ without vegetation can be hard to distinguish from agricultural land or clearcuts
++ old clearcuts with slow to no regeneration (<5m height) can be classified as "other open land". Mostly a problem in unproductive region in the centre and north of Sweden
+
+Exploited land
+
++ three subclasses buildings, streets, and other
++ for buildings, the focus was on preserving the are covered by buildings, which decreases the accuracy of buildings at pixel level
++ for roads (and railways), continuity has been preserved which leads to an overestimation of the area covered by this class
++ other exploited land can be mixed with other open land without vegetation, especially rockbed and beaches
+
+Water
++ 2 classes: See, Lakes and Rivers (>6m)
++ the two classes can sometimes be hard to differentiate for costal lagunes
+
+```{r}
+NMD <- raster("/Users/fabian/Documents/01_Work/01_Research/18_Swedish_Bird_habitat_model/data/NMD/nmd2018bas_ogeneraliserad_v1_0.tif")
+
+NMD_aob <- raster("/Users/fabian/Documents/01_Work/01_Research/18_Swedish_Bird_habitat_model/data/NMD_Tillaggsskikt_Markanvandning/NMD_markanv_bete_v1.tif")
+```
+
+## TUVA data
+
+The data are described and can be downloaded from [here](https://jordbruksverket.se/e-tjanster-databaser-och-appar/e-tjanster-och-databaser-stod/tuva)
+
+```{r}
+# TUVA (AOB) shape-file
+TUVA <- read_sf(here("TUVA", "AoB_2019.shp"))
+
+#load data incl. RMO_spat with the information on what TUVA objects are in the RMO inventory
+load("RMO_clean_data.RData")
+```
+
+subset TUVA data to those objects used in the RMO inventory
+```{r}
+TUVA <- TUVA %>% filter(OBJECTID %in% RMO_spat$OBJECTID)
+```
+
+project TUVA to match the projection of the NMD
+```{r}
+TUVA <- st_transform(TUVA, st_crs(NMD)) 
+
+#keep only ObjectID for now, can match with other data later
+TUVA <- TUVA %>% dplyr::select(OBJECTID)
+
+#export
+write_sf(TUVA)
+
+write_sf(TUVA, here("TUVA", "TUVA_buterflies.gpkg"))
+```
+
+
+crop NMD and NMD bete to TUVA file and stack them
+
+```{r}
+#make a bounding box around all TUVA objects
+TUVA_box <- st_combine(TUVA) %>% st_convex_hull() %>% st_buffer(20000)
+
+#crop NMD layers to bbox
+
+NMD_stack <- 
+list(NMD, NMD_aob) %>% 
+  lapply(function(x) crop(x, as_Spatial(TUVA_box)))
+
+NMD_stack <- stack(NMD_stack)
+
+writeRaster(NMD_stack, filename=here("TUVA", "TUVA_NMD_stack.tif"))
+```
+
+
+
+> För att identifiera de rumsliga skalor och de mängder av hagmarker som har mest effekt på fjärilars artrikedom tog vi kring varje hagmark fram mängden hagmark i 31 olika skalor (Figur 2). Vi lade en cirkel med en given skala (radie) kring varje hagmark där fjärilar inventerats, från den minsta skalan (100 m) till den största skalan (10 km)(Figur 2).
+
+**make buffers for raster extraction** 
+```{r}
+d <- seq(100, 10000, length.out = 31)
+
+# make a 1km buffer around each route
+TUVA_buffer_list <- 
+  lapply(d, function(x){
+    st_buffer(TUVA, x)
+  })
+
+
+#example with some buffers at some buffer distances
+
+ggplot(slice(TUVA,1))+
+  geom_sf()+
+  geom_sf(data = slice(TUVA_buffer_list[[1]], 1), fill = NA)+ #100m
+  geom_sf(data = slice(TUVA_buffer_list[[5]], 1), fill = NA)+ #1400m
+  geom_sf(data = slice(TUVA_buffer_list[[10]], 1), fill = NA)+ #3070m
+  geom_sf(data = slice(TUVA_buffer_list[[15]], 1), fill = NA) #4720m
+```
+
+**crop list of raster for NMD data**
+
+We first crop the NMD to smaller raster centred around the TUVA object. This speeds up extraction significantly later. 
+```{r}
+
+NMD_stack <- stack(here("TUVA", "TUVA_NMD_stack.tif"))
+
+```
+
+
+example plot
+
+```{r}
+
+TUVA_crop_ex = TUVA %>%
+        slice(2) %>% 
+        st_buffer(11000) %>% 
+        crop(NMD_stack, .)
+
+{plot(unstack(TUVA_crop_ex)[[1]])
+  plot(unstack(TUVA_crop_ex)[[2]], add = TRUE, col = "blue")
+  plot(TUVA[2,], col = "red", add = TRUE)
+  for(i in seq_along(d)){
+    plot(TUVA_buffer_list[[i]][which(TUVA$OBJECTID == TUVA[2,]$OBJECTID),], col = NA, add = TRUE)
+  }
+}
+
+```
+extract landuse data at each buffer size
+
+```{r}
+# vector of OBJECTID names 
+OBJECTID <- names(TUVA_raster)
+
+# buffer sizes
+d <- seq(100, 10000, length.out = 31)
+
+# extract rastervalues at all buffer sizes for all TUVA objects
+
+future::plan(multisession)
+
+TUVA_landuse <- 
+ future_map(
+    .x = OBJECTID, .f = function(x) {
+      
+      TUVA_crop = TUVA %>%
+        filter(OBJECTID == x) %>% 
+        st_buffer(11000) %>% 
+        crop(NMD_stack, .)
+      
+      res_list <- vector(mode = "list", length = length(d))
+      
+      for(l in seq_along(d)){
+        
+        
+        
+        res_list[[l]] <-
+          TUVA_buffer_list[[l]] %>% 
+          filter(OBJECTID == x) %>% 
+          raster::extract(x = TUVA_crop, y =  ., cellnumbers = F,  df = T) %>% 
+          as_tibble() %>% 
+          mutate(OBJECTID = x, distance = d[l]) %>% 
+          rename(NMD_base = TUVA_NMD_stack.1) %>% 
+          rename(NMD_aob = TUVA_NMD_stack.2) %>%
+          group_by(OBJECTID, distance, NMD_base, NMD_aob) %>% 
+          summarise(n = n(), .groups = "drop")
+        
+      }
+      
+      bind_rows(res_list)
+    },
+    .options = furrr_options(packages = c("dplyr", "tibble", "sf", "raster")),
+    .progress = TRUE
+  )
+
+plan(sequential)
+
+TUVA_landuse_df <- bind_rows(TUVA_landuse)
+
+#export data
+#saveRDS(TUVA_landuse, "~/Fabian/Butterflies/TUVA_landuse.Rds")
+```
+
+
+
+
+
+
