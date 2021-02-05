@@ -15,194 +15,477 @@ output:
     toc: yes
 ---
 
-load packages
 
 ```{r}
-library(here)
+library(ggplot2)
+library(ggthemes)
+library(sf)
 library(dplyr)
 library(tidyr)
-library(ggplot2)
+library(lubridate)
+library(RColorBrewer)
+library(ggsn)
+library(iNEXT)
 library(readxl)
+library(vegan)
+
+#source("estimateD_func.r")
 ```
 
-load data and clean data
-
-Data description:
-
-+ Länstyrelsen data (county counts other than SLU)
-
---> biotop only for Länstyrelsen
---> Slingor and Transects, analyse separately unless they have length so we can standardise
-
-+ SLU data (collected by SLU, location needs to be checked from spatial information)
-
-+ from 2009 to 2018 (doublecheck)
-There is differnt periods 9-13 and 14-18, Analyse seperately?
-
-vadd_tist_klint only SLU
-
-Spatial data in sheet 'site_geo'
-
-EPSG:3021
-
---> get county info from county shapefile and geo-location of routes
+#import data
 
 ```{r}
-RMO <- read_excel("RMO_combined_data.xlsx", sheet = "all_observations_clean_no_calc", 
-                  col_types = "text")
+load("RMO_clean_data.RData")
 
-Var_RMO <- read_excel("RMO_combined_data.xlsx", sheet = 1)
+NILS <- read_sf("NILS_sw99_NILS_Stratum_SW99.shp")
 
-Var_RMO %>% 
-  filter(Variable %in% colnames(RMO)) %>% 
-  View()
-
-#checking those numeric variables that will be analysed
-
-#count OK
-as.numeric(RMO$count) %>% is.na %>% sum
-
-#segment --> need fixing if necessary (mixed numeric 1,2,.. and text S1, S2, ..)
-RMO[which(is.na(as.numeric(RMO$segment))),"segment"] %>% table()
-
-#S1-17 --> strip "S"
-#S --> 1
-#A-K --> 1-11
-# drop rest
-
-#biotope --> need fixing. Includes comments ("se anm") and uncertain numeric code ("13/11"). But rel few cases in total (632)
-RMO$biotope[!is.na(RMO$biotope)][which(is.na(as.numeric(RMO$biotope[!is.na(RMO$biotope)])))] %>% table() 
-
-#remove all funky habitats
-# check if NAs for Slingor (SiteType == "S) can be imputed
-
-#length --> mostly OK. Numeric or missing value. Some text (only 11 cases)
-RMO$length[!is.na(RMO$length)][which(is.na(as.numeric(RMO$length[!is.na(RMO$length)])))]
-
-# c <- 246
-# i.u. <-  ? 
-# check if length can be imputed from other years
-# for "transect" we have all shape files, for "slingor" not for all
-
-#perc_veg_0-5 --> needs fixing. Includes comments, symbols ("x") and unrecognized NAs (that are coded as "NA" in raw data)
-RMO$`perc_veg_0-5`[!is.na(RMO$`perc_veg_0-5`)][which(is.na(as.numeric(RMO$`perc_veg_0-5`[!is.na(RMO$`perc_veg_0-5`)])))] %>% 
-  table() 
-
-#perc_veg_5-15 --> needs fixing. Includes comments, symbols ("x") and unrecognized NAs (that are coded as "NA" in raw data)
-RMO$`perc_veg_5-15`[!is.na(RMO$`perc_veg_5-15`)][which(is.na(as.numeric(RMO$`perc_veg_5-15`[!is.na(RMO$`perc_veg_5-15`)])))] %>% table() 
-
-#perc_veg_above_15 --> needs fixing. Includes comments, symbols ("x") and unrecognized NAs (that are coded as "NA" in raw data)
-RMO$`perc_veg_above_15`[!is.na(RMO$`perc_veg_above_15`)][which(is.na(as.numeric(RMO$`perc_veg_above_15`[!is.na(RMO$`perc_veg_above_15`)])))] %>% table() 
-
-# should only be present in transects and should ideally sum to 100% between three size classes
-# NAs might be 0 if other categories sum to 100
-# x's are likely 100 if no x in other categories
-
-#per_mill_flowers --> needs fixing. Includes wrongly formatted numbers, comments and literal "NA" (as text)
-RMO$per_mill_flowers[!is.na(RMO$per_mill_flowers)][which(is.na(as.numeric(RMO$per_mill_flowers[!is.na(RMO$per_mill_flowers)])))] %>% table() 
-
-#,0,05 -> 5%?
-# <X -> truncate to X
-# mean of range
-
-#perc_vadd_tist_klint --> needs fixing. Includes wrongly formated NAs and comments
-RMO$perc_vadd_tist_klint[!is.na(RMO$perc_vadd_tist_klint)][which(is.na(as.numeric(RMO$perc_vadd_tist_klint[!is.na(RMO$perc_vadd_tist_klint)])))] %>% table() 
-
-#exclude
-
-#vadd_tist_klint OK
-RMO$vadd_tist_klint %>% unique()
-
-#temp OK
-is.numeric(RMO$temp[!is.na(RMO$temp)]) %>% is.na %>% sum
-
-### more variables to be anaylsed ### ???
-
-# HavdStatus
-RMO$HavdStatus[!is.na(RMO$HavdStatus) & !grepl("NA", RMO$HavdStatus)] %>% table
-
-# HavdNotkreatur
-
-# HavdFar
-
-# HavdHast
+Spec_cat <- read_excel("Species_meta_check.xlsx", sheet = "final")
 
 ```
 
-To produce the code for the figures I start by just excluding all non-numeric variables.
 
-!!! NEED TO FIX LATER !!!!
+
+#prepare data
+
+
+## metadata
+Prepare RMO data
+
+split data into metadata (`RMO_meta`) and a Species matrix (`RMO_spec`), identified by unique ID
 
 ```{r}
-RMO <- 
-  RMO %>% 
-  select("site code", "county", "SpeciesText", 
-         "Species ID", "count", "biotope", "length", 
-         "perc_veg_0-5", "perc_veg_5-15", "perc_veg_above_15",
-         "per_mill_flowers", "perc_vadd_tist_klint", "vadd_tist_klint",
-         "temp")
 
-RMO <- RMO %>% 
-  mutate(across(.cols= c("count", "biotope", "length", 
-         "perc_veg_0-5", "perc_veg_5-15", "perc_veg_above_15",
-         "per_mill_flowers", "perc_vadd_tist_klint", "vadd_tist_klint",
-         "temp"), as.numeric))
+RMO_meta <- 
+  RMO %>%
+  select(-SpeciesID, -SpeciesText, -count) %>% 
+  distinct() %>% 
+  mutate(ID = paste(date, SiteID, segment, sep = "_")) %>% 
+  left_join(st_set_geometry(RMO_spat, NULL))  #join AOB site ID
 
-RMO <- RMO %>% 
-  mutate(county = case_when(
-    county == "M" ~ "Skåne",
-    county == "H" ~ "Kalmar",
-    county == "F" ~ "Jörnköping",
-    county == "E" ~ "Östergötland",
-    county == "T" ~ "Örebro",
-    county == "SLU" ~ NA_character_,
-    TRUE ~ county
-  ))
-
-RMO <- RMO %>% 
-  mutate(biotope = case_when(
-    biotope == 1 ~ "Skogsbryn",
-    biotope == 2 ~ "Vägren",
-    biotope == 3 ~ "Dikesren",
-    biotope == 4 ~ "Hygge",
-    biotope == 5 ~ "Kärr",
-    biotope == 6 ~ "Mosse",
-    biotope == 7 ~ "Vall",
-    biotope == 8 ~ "Trädgårdar",
-    biotope == 9 ~ "Hällmark",
-    biotope == 10 ~ "Sandmark",
-    biotope == 11 ~ "Kraftledning",
-    biotope == 12 ~ "Skogsbryn",
-    biotope == 13 ~ "Skogsbryn",
-    biotope == 14 ~ "Skogsbryn",
-    biotope == 15 ~ "Skogsbryn",
-    biotope == 16 ~ "Skogsbryn",
-    TRUE ~ county
-  ))
+```
 
 
+we split the data into two rounds. 
+`round_1` : 2009 and 2013
+`round_2` : 2013 and 2019
 
 
-RMO %>% filter(county == "SLU")
+```{r}
+RMO_meta %>% 
+  select(SiteID, date, county) %>% 
+  mutate(county = ifelse(county == "SLU", "SLU", "Län")) %>% 
+  mutate(date = year(date)) %>% 
+  distinct() %>% 
+  mutate(yes =1 ) %>% 
+  pivot_wider(names_from = date, values_from = yes, values_fill = 0) %>% 
+  select(-SiteID) %>% 
+  group_by_all() %>% 
+  summarise(n = n()) %>% 
+  ungroup() %>% 
+  mutate(case = 1:n()) %>% 
+  pivot_longer(cols = starts_with("20"),names_to = "date") %>% 
+  mutate(date = as.numeric(date)) %>% 
+  filter(value == 1) %>% 
+  select(-value) %>% 
+  distinct() %>% 
+  ggplot(aes(x = date, y = case, fill = n, colour = n))+
+  facet_wrap(~county, scales = "free_y") +
+  geom_point(shape = 21)+
+  geom_line(aes(group = case))+
+  scale_fill_viridis_c()+
+  scale_colour_viridis_c()+
+  geom_vline(xintercept = 2013.5, linetype = "dashed", colour = "darkred")
+```  
+
+adding `round` variable
+```{r}
+RMO_meta <- 
+RMO_meta %>% 
+  mutate(round = case_when(year(date) <= 2013 ~ "round_1",
+                           TRUE ~ "round_2"))
+```
 
 
+##sites with missing length data
+
+How many sites have no length information at all?
+```{r}
+
+RMO_meta %>% 
+  select(SiteText, SiteType, county, County_text, length) %>% 
+  group_by(SiteText) %>% 
+  summarise(SiteType = unique(SiteType),
+            county = unique(county),
+            County_text = unique(County_text),
+            length = all(is.na(length))) %>% 
+  group_by(county, SiteType) %>% 
+  summarise(prct_no_len = round(sum(length)/n()*100)) %>% 
+  left_join(filter(distinct(select(RMO_meta, county, County_text)), county != "SLU")) %>% 
+  select(County_text, county, SiteType, prct_no_len)
+  
+```
+
+N excluded site without any length information
+```{r}
+RMO_meta %>% 
+  filter(!is.na(length)) %>% 
+  pull(SiteText) %>% 
+  unique() %>% 
+  length() %>% 
+  `-`(length(unique(RMO_meta$SiteText)), .)
+```
+
+I don't exclude sites without length info as we will base richness / diversity on abundance based coverage indices, not standardize by length
+
+## species matrix
+```{r}
+
+RMO_spec <- 
+  RMO %>%
+  mutate(ID = paste(date, SiteID, segment, sep = "_")) %>% 
+  select(ID, SpeciesText, count) %>% 
+  filter(ID %in% RMO_meta$ID) %>% 
+  group_by(ID, SpeciesText) %>%       # shouldn't be necessary as there shouldn't be double entries
+  summarise(count = sum(count)) %>%   # 
+  pivot_wider(names_from = SpeciesText, values_from = count, values_fill = 0)
+
+RMO_spec <- RMO_spec[, !grepl("/", colnames(RMO_spec))] #excluding species aggregates
+RMO_spec <- RMO_spec[, !grepl("Obestämd", colnames(RMO_spec))] #excluding records not identified to Species
+RMO_spec <- RMO_spec[, !grepl("Nollobservation", colnames(RMO_spec))] #excluding column to store 0s
+
+RMO_spec <- select(RMO_spec, -"NA") %>% ungroup 
 ```
 
 
 # Figures
 
+Spatial Figures:
+
+Fig 1A	strata (Esséen et al 2004) needed (SJV)
+1. Bakgrundsinfo och resultat på flerfärgade kartor. 
+
+```{r}
+
+
+
+NILS <- st_transform(NILS, st_crs(RMO_spat)) %>% 
+  st_make_valid(.)
+
+RMO_spat_p <-
+  RMO_spat %>% 
+  mutate(Data = case_when(county == "SLU" ~ "NILS", 
+                          TRUE ~ "Län")) %>% 
+  group_by(OBJECTID) %>% 
+  st_centroid()
+
+
+map_cols <- colorRampPalette(brewer.pal(2, "Blues"))(10)
+
+ggplot()+
+  geom_sf(data = NILS, aes(fill = StratumNam), alpha = 0.6, size = 0.05)+
+  geom_sf_text(data = NILS %>% st_point_on_surface,
+               aes(label = OBJECTID), size = 2.5, fontface = "bold")+
+  geom_sf(data = RMO_spat_p, size = 0.01, aes(colour = Data))+
+  scale_fill_manual(values = map_cols)+
+  scale_colour_manual(values = c("darkred", "black"))+
+  theme_map()+
+  theme(legend.position = "none")+
+  blank() +
+  north(NILS)+
+  scalebar(NILS, dist = 100, dist_unit = "km",
+             transform = FALSE, st.size = 2)
+
+```
+Fig 1B	Distribution of valuable seminatural grasslands needed (SJV)
+
+
+3. Jämföra transekter och slingor (från de regionala datana). 
+
+4. Jämföra biotoptypernas artantal, antal rödlistade (plus relativ mängd) och artsammansättning (diagram och multivariata matrix).  
+
+5. Sammanvägda trender med TRIM-index för fjärilsgrupper, artnivå i hela regionen och länsvis. 
+
+6. Med multivariata analyser (typ PCA) belysa A) likheter och skillnader i artsammansättningen på län och objektsnivå samt i de olika biotoptyperna (slingsegmenten). B) Vilka parametrar är viktiga för de olika arterna? (nektarrikedom, veg höjd…). 
+
+7. GI-karta – GIS-analys som kombinerar avstånd mellan ängs- och betesmarksobjekt med artrikedom samt rödlistade arter i provpunkterna (LST Örebro – Helena Rygne skall kontaktas för att efterlikna deras körningar). 
+
+8. Lämpliga styrkeanalyser (där hänsyn tas till t.ex.: Signifikansnivån, Effektstorlek., Variationen hos responsvariabeln, Provstorlek och Styrkan).  
+
+
+
+
 check Analysfrågar svar final for how to analyse
 
 ## Artrikedom per inventerat objekt
 
+2. Tabeller och diagram med artrikedom per inventerat objekt samt individrikedom (Medelvärden med 95 % CI och totalt antal arter) uppdelat på hela regionen, län och objektsvis. (objekten är stickprov). 
+
 total species richness and richness of grassland specialist (map)
 
 separately between slingor and transects --> check methods previous report 
+
 seperatly between periods 
+
+Method text from the 2015 report:
+
+>Artrikedom och täthet av individer beräknades både för transekter i hagmarkerna och för slingsegmenten i de omgivande markerna. Tätheten utrycks som antal individer/100 m. Eftersom transekterna hade olika längd och därmed var svåra att direkt jämföra med avseende på artrikedom (längre transekter ger fler arter) användes transekter och slingsegment med en längd mellan 100-400 m för dessa beräkningar. Medelvärdet för antal arter i en biotoptyp är således medelvärdet av alla segment som var 100-400 m av respektive biotoptyp. 
+
+>För betesmarkerna gäller samma sak men proceduren var något annorlunda. Här valdes slumpmässigt ut transekter från varje område till dess längd motsvarade medelvärdet för slingsegmentens längder. För varje område gjordes denna procedur om 100 gånger, och sedan användes medelvärdet för alla områden.
+
+>Totalt antal arter per biotop uppskattades också statistiskt med metoden Chao2 och programmet EstimateS. 
+
+
+Total number of species per Site
+
+I follow request to only include transects but use data from Län & SLU
+
+In the previous report, species richness was standardized by keeping only segments with a length >100m & <400m). However, this 
+
+(1) excludes transect without length information
+(2) when I sum the transect segments (per site) the lengths are longer than this range
+(3) I could take the middle 50% (25th-75th quantile) of the length but it's not a great solution (and still a factor of 3 between different transects)
+
+--> It seems like we want site totals instead, but that doesn't pair well with the length filtering of segments above (we could keep one segment per site or all, depending on their lengths); also sites have been visited more or less often in the different rounds <--
+
+Instead I will try to pool over sites *and* dates (within each round). 
+(1) We can use all data (regardless if length is known)
+(2) we standardise by sample completeness (based on total number of observed ind. and the frequency distribution of species)
+
+
+pool transect and dates
+```{r}
+
+RMO_meta_pooled <- 
+  RMO_meta %>% 
+  filter(SiteType == "T") %>% #keep only trasnect
+  select(OBJECTID, round, ID, County_text, county) %>% 
+  group_by(County_text, county, OBJECTID, round) %>% 
+  summarise(ID = list(unique(ID))) %>% # get a list of what unique transect x date x round ID should be grouped
+  mutate(p_ID = paste(OBJECTID, round, sep = "_"))
+
+RMO_spec_pooled <- 
+RMO_meta_pooled %>% 
+  pull(ID) %>%
+  lapply(., function(x) {
+    RMO_spec %>% 
+    filter( ID %in% x) %>%
+      select(-ID) %>% 
+      summarise_all(sum)
+      }) %>% 
+  bind_rows()
+```
+
+
+
+I use coverage based interpolation - extrapolation based on abundance data to estimate total species richness at each site in each round - and to compare sites at equal coverage
+
+I use the iNEXT package for this
+
+```{r}
+# transform into matrix
+RMO_spec_pooled <- 
+  as.matrix(RMO_spec_pooled)
+
+rownames(RMO_spec_pooled) <- RMO_meta_pooled$p_ID
+
+#calculate estimated richness (and CI) and different levels of sample size (rarefaction) and completeness
+out <- iNEXT::iNEXT(t(RMO_spec_pooled), 
+                    datatype = "abundance", 
+                    q = c(0),
+                    nboot = 1 #increase for better estimate
+                    )
+```
+
+
+we can look at the distribution of sample completeness across sites and rounds
+
+We see that most sites have actually quite decent sample completeness, of >60 and even > 70 or > 80%
+
+We exclude site with a sample completeness < 60% as the extrapolated diversity from low completeness sites is uncertain and only few sites have this low 
+```{r}
+out$DataInfo %>% 
+  rename("p_ID" = site) %>% 
+  left_join(RMO_meta_pooled) %>% 
+  select(-ID) %>% 
+  ggplot(aes(x = SC))+
+  geom_histogram()+
+  facet_wrap(~round)
+```
+
+we can look at abundance based and sample completeness based rarefaction curves to visualize how complete the assessments are
+```{r}
+RMO_out <- 
+out$iNextEst %>% bind_rows(.id = "p_ID") %>% 
+  left_join(select(RMO_meta_pooled, -ID)) %>% 
+  mutate(county = case_when(county != "SLU" ~ "LänStyr.",
+                            TRUE ~ county))
+
+ggplot(RMO_out, aes(x = m, y = qD, group = OBJECTID, colour=county))+
+  geom_line(size = 0.2)+
+  geom_point(data = . %>% filter(method == "observed"), size = 0.1, colour = "black")+
+  facet_grid(round~County_text)+
+  scale_x_continuous(limits = c(0,400))
+
+ggplot(RMO_out, aes(x = SC, y = qD, group = OBJECTID, colour=county))+
+  geom_line(size = 0.2)+
+  geom_point(data = . %>% filter(method == "observed"), size = 0.1, colour = "black")+
+  facet_grid(round~County_text)
+```
+
+
+plot estimated richness 
+```{r}
+p_ID_excl <- 
+RMO_out %>% 
+  filter(method == "observed") %>% 
+  filter(SC < 0.6) %>% 
+  pull(p_ID)
+
+
+map_cols <- colorRampPalette(brewer.pal(2, "Blues"))(10)
+
+RMO_est <- 
+  RMO_spec_pooled %>%
+  split(., row(.)) %>% 
+  `names<-`(rownames(RMO_spec_pooled)) %>% 
+  lapply(., function(x){iNEXT::estimateD(x, base = "coverage", level = 0.95, conf = NULL)}) %>% 
+  suppressWarnings() %>%
+  bind_rows(.id = "p_ID") %>% 
+  left_join(RMO_meta_pooled) 
+
+p1 <- 
+RMO_spat %>% 
+  group_by(OBJECTID) %>% 
+  st_centroid() %>% 
+  left_join(RMO_est, .) %>% 
+  st_as_sf() %>% 
+  ggplot()+
+  geom_sf(data = filter(NILS, OBJECTID < 7), 
+          aes(fill = StratumNam), alpha = 0.6, 
+          size = 0.05,  show.legend = F)+
+  geom_sf(size = 0.5, aes(colour = `q = 0`))+
+  facet_wrap(~round)+
+  scale_colour_viridis_c(option = "plasma")+
+  scale_fill_manual(values = map_cols)+
+   theme_map()+
+  # theme(legend.position = "right")+
+  # blank() +
+  # north(filter(NILS, OBJECTID < 7))+
+  # scalebar(filter(NILS, OBJECTID < 7),
+  #          dist = 100, dist_unit = "km",
+  #            transform = FALSE, st.size = 2)+
+  ggtitle("average S, all species")+
+  theme(legend.position = "bottom")
+  
+
+p1
+
+```
+
+
+Same as above for Species defines as grassland specialist
+
+Is it valid to do that? Can I subset data to specialist and then extrapolate N of expected specialist?
+
+```{r}
+
+grassland <- 
+  Spec_cat %>% 
+  filter(Grassland_spec) %>% 
+  pull(SpeciesText)
+  
+
+RMO_spec_pooled_grass <- RMO_spec_pooled[,grassland]
+RMO_spec_pooled_grass <- RMO_spec_pooled_grass[rowSums(RMO_spec_pooled_grass) > 0,]
+
+RMO_est_grass <- 
+  RMO_spec_pooled_grass %>%
+  split(., row(.)) %>% 
+  `names<-`(rownames(RMO_spec_pooled_grass)) %>% 
+  lapply(., function(x){iNEXT::estimateD(x, base = "coverage", level = 0.95, conf = NULL)}) %>% 
+  suppressWarnings() %>%
+  bind_rows(.id = "p_ID") %>% 
+  left_join(RMO_meta_pooled) 
+
+p2 <- 
+RMO_spat %>% 
+  group_by(OBJECTID) %>% 
+  st_centroid() %>% 
+  left_join(RMO_est_grass, .) %>% 
+  st_as_sf() %>% 
+  ggplot()+
+  geom_sf(data = filter(NILS, OBJECTID < 7), 
+          aes(fill = StratumNam), alpha = 0.6, 
+          size = 0.05,  show.legend = F)+
+  geom_sf(size = 0.5, aes(colour = `q = 0`))+
+  facet_wrap(~round)+
+  scale_colour_viridis_c(option = "plasma")+
+  scale_fill_manual(values = map_cols)+
+   theme_map()+
+  # theme(legend.position = "right")+
+  # blank() +
+  # north(filter(NILS, OBJECTID < 7))+
+  # scalebar(filter(NILS, OBJECTID < 7),
+  #          dist = 100, dist_unit = "km",
+  #            transform = FALSE, st.size = 2)+
+  ggtitle("estimated number of grassland specialist")+
+  theme(legend.position = "bottom")
+  
+
+
+p2
+```
+
 
 ## Antal individer /art/år
 
-vertical barplot of total number of individuals by species (for all species) 
+vertical barplot of total number of individuals by species (for all species), by round and type
+
+(should it be average per year?)
+```{r}
+
+RMO_tot_ind <- 
+  RMO_meta %>% 
+  select(SiteType, round, ID) %>% 
+  group_by(round, SiteType) %>% 
+  summarise(ID = list(unique(ID))) %>% # get a list of what unique transect x date x round ID should be grouped
+  mutate(p_ID = paste(round, SiteType, sep = "_"))
+
+RMO_spec_ind <- 
+RMO_tot_ind %>% 
+  pull(ID) %>%
+  lapply(., function(x) {
+    RMO_spec %>% 
+    filter( ID %in% x) %>%
+      select(-ID) %>% 
+      summarise_all(sum)
+      }) %>% 
+  bind_rows()
+
+spec_other <- names(colSums(RMO_spec_ind)[colSums(RMO_spec_ind) < 50])
+
+spec_order <- names(sort(colSums(RMO_spec_ind)))
+spec_order <- spec_order[!spec_order %in% spec_other]
+spec_order <- c("Other", spec_order)
+
+
+p3 <- 
+RMO_spec_ind %>% 
+  mutate(p_ID = RMO_tot_ind$p_ID) %>% 
+  pivot_longer(!one_of("p_ID"), names_to = "Species", values_to = "Abundance") %>% 
+  left_join(select(RMO_tot_ind, -ID)) %>% 
+  mutate(SiteType = ifelse(SiteType == "T", "Transects", "Segments"),
+         round = ifelse(round == "round_1", "Round 1", "Round 2")) %>% 
+  mutate(Species = ifelse(Species %in% spec_other, "Other", Species)) %>% 
+  mutate(Species = factor(Species, levels = spec_order)) %>% 
+  ggplot(aes(x = Species, y = Abundance))+
+  geom_bar(stat = "identity")+
+  facet_wrap(~ round * SiteType, nrow = 1)+
+  coord_flip()
+  #theme_excel_new()
+
+p3
+```
 
 Q: which year? (Are there several?)
 
@@ -210,11 +493,129 @@ Q: which year? (Are there several?)
 
 (obs bara regionala data). Uppdelat transekter och slingor för att kunna jmf de två perioderna?
 
+Not sure what this is supposed to tell us. The transects and Slingor have different breadth and different lengths...
+
+Should I filter for those with length and standardize per area? (still not super useful as Species~are realtionship is not linear)
+
+```{r}
+
+RMO_p5 <- 
+RMO_meta %>% 
+  filter(county != "SLU") %>% #exclude SLU
+  select(round, OBJECTID, SiteType, date, ID) %>%
+  distinct() %>% 
+  left_join(RMO_spec) %>% 
+  group_by(round, OBJECTID, SiteType, date) %>% 
+  summarise(across(one_of(colnames(RMO_spec[,-1])), sum), .groups = "drop") %>% #sum over segemnt on same date
+  mutate(across(one_of(colnames(RMO_spec[,-1])), function(x) x>0)) %>%  #code as p/a
+  mutate(Richness = rowSums(.[,colnames(RMO_spec[,-1])])) %>% # richness per visit
+  select(!one_of(colnames(RMO_spec[,-1]))) %>% 
+  group_by(round, OBJECTID, SiteType) %>% 
+  summarise(mean_rich = mean(Richness))
+  
+  
+RMO_p5 %>% 
+  mutate(SiteType = ifelse(SiteType == "T", "Transects", "Segments"),
+         round = ifelse(round == "round_1", "Round 1", "Round 2")) %>% 
+  ggplot(aes(x = mean_rich))+
+  geom_histogram(binwidth = 3, aes(fill = SiteType), colour = "black", show.legend = FALSE)+
+  facet_grid(round~SiteType)+
+  theme_excel_new()+
+  scale_fill_brewer(palette = "Set1")
+
+```
+
+
 Histogram of number of species / location, divided between "slingor" and "transektor"
 
-## Biotoptypernas medel artantal + jmf perioderna
+## Biotoptypernas medel artantal
 
-Mean N species + CI by biotoptyp
+Mean number of species by biotope type (only for Län and only for Slingor)
+
+```{r}
+RMO_p6 <-  
+RMO_meta %>% 
+  filter(county != "SLU") %>% #exclude SLU
+  filter(SiteType != "T") %>% 
+  filter(!is.na(biotope_text)) %>% 
+  select(ID, round, biotope_text) %>% 
+  distinct() %>% 
+  left_join(RMO_spec) %>% 
+  group_by(round, biotope_text) %>% 
+  summarise(across(one_of(colnames(RMO_spec[,-1])), sum), .groups = "drop")
+
+RMO_mat_bio <- 
+RMO_p6 %>% 
+  select(-round, -biotope_text) %>% 
+  as.matrix() %>% 
+  `rownames<-`(paste(RMO_p6$round, RMO_p6$biotope_text, sep = "__")) 
+
+RMO_out_bio <- 
+  RMO_mat_bio %>%
+  t() %>% 
+  iNEXT(datatype = "abundance", q = c(0,1),
+                    nboot = 1) 
+
+RMO_out_bio$iNextEst %>% 
+  bind_rows(.id = "ID") %>% 
+  separate(ID, into = c("round", "biotope_text"), sep = "__") %>% 
+  ggplot(aes(x = m, y = qD, linetype = as.factor(order), colour = round))+
+  geom_line()+
+  geom_point(data = . %>% filter(method == "observed"), size = 0.1, colour = "black")+
+  facet_wrap(~biotope_text)+
+  scale_x_continuous(limits = c(0,5000))
+```
+
+
+
+```{r}
+
+RMO_bio_div <- 
+RMO_mat_bio %>% 
+  split(., row(.)) %>% 
+  `names<-`(rownames(RMO_mat_bio)) %>% 
+  lapply(., function(x){iNEXT::estimateD(x, base = "coverage", level = 0.99, conf = 0.95)}) %>% 
+  bind_rows(.id = "ID")
+
+RMO_bio_div <- 
+  RMO_bio_div %>% 
+  separate(ID, into = c("round", "biotope_text"), sep = "__")
+
+
+bio_order <- 
+  RMO_bio_div %>% 
+  filter(order == 0) %>% 
+  group_by(biotope_text) %>% 
+  summarise(qD = mean(qD)) %>% 
+  arrange(qD) %>% 
+  pull(biotope_text)
+
+bio_obs <- 
+  RMO_out_bio$iNextEst %>% 
+  bind_rows(.id = "ID") %>% 
+  separate(ID, into = c("round", "biotope_text"), sep = "__") %>% 
+  filter(method == "observed") %>% 
+  filter(biotope_text != "Övriga")
+    
+RMO_bio_div %>%
+  filter(order < 2) %>% 
+  filter(biotope_text != "Övriga") %>% 
+  mutate(biotope_text = factor(biotope_text, levels = bio_order)) %>% 
+  ggplot(aes(x = biotope_text, y = qD, ymin = qD.LCL, ymax = qD.UCL, colour = round))+
+  geom_pointrange(fatten = 1, position = position_dodge(width = 0.8))+
+  geom_point(data = bio_obs, size = 1,alpha = 0.5,
+             position = position_dodge(width = 0.8))+
+  facet_grid(~order, scales = "free_y")+
+  scale_y_continuous(limits = c(0, NA))+
+  coord_flip()+
+  scale_colour_brewer(palette = "Set1")+
+  labs(y = "Richness", x = "")+
+  theme_bw()+
+  theme(legend.position = "bottom")
+  
+  
+
+```
 
 ## Biotoptypernas artantal och relativa mängd
 
@@ -222,20 +623,350 @@ Total number of species observed by biotoptyp, coloured sep if redlisted, compar
 
 --> double axis chart, needs different visualization
 
+```{r}
+
+biotop_frac <- 
+RMO_meta %>% 
+  filter(county != "SLU") %>% #exclude SLU
+  filter(SiteType == "S") %>% 
+  filter(!is.na(biotope_text)) %>% 
+  filter(!is.na(length)) %>% 
+  select(OBJECTID, SiteID, segment, length, biotope_text, round) %>% 
+  distinct() %>% 
+  group_by(OBJECTID, SiteID, segment, round) %>% 
+  slice(1) %>% 
+  group_by(biotope_text, round) %>% 
+  summarise(length = sum(length)) %>% 
+  group_by(round) %>% 
+  mutate(length = length/sum(length)*100)
+
+redlist_richness <- 
+ RMO_meta %>% 
+  filter(county != "SLU") %>% #exclude SLU
+  filter(SiteType == "S") %>% 
+  filter(!is.na(biotope_text)) %>% 
+  select(round, OBJECTID, SiteType, date, ID, biotope_text) %>%
+  distinct() %>% 
+  left_join(RMO_spec) %>% 
+  group_by(round, biotope_text) %>% 
+  summarise(across(one_of(colnames(RMO_spec[,-1])), sum), .groups = "drop") %>% 
+  mutate(across(one_of(colnames(RMO_spec[,-1])), function(x) x>0)) %>%  #code as p/a
+  pivot_longer(one_of(colnames(RMO_spec[,-1])), names_to = "Species", values_to = "presence") %>% 
+  mutate(Redlisted = case_when(Species %in% filter(Spec_cat, Redlisted)$SpeciesText ~ TRUE,
+         TRUE ~ FALSE)) %>% 
+   group_by(round, biotope_text, Redlisted) %>% 
+   summarise(Richness = sum(presence)) %>% 
+  pivot_wider(names_from = Redlisted, values_from = Richness) %>% 
+  rename("Redlisted" = "TRUE", "Richness" = "FALSE")%>% 
+  mutate(Richness = Redlisted + Richness) 
+ 
+
+
+redlist_richness %>% 
+  left_join(biotop_frac) %>% 
+  pivot_longer(cols = one_of("Richness", "Redlisted", "length"), 
+               names_to = "Var", values_to = "val") %>% 
+  mutate(biotope_text = factor(biotope_text, levels = bio_order)) %>% 
+  mutate(Var = case_when(Var == "length" ~ "% of each habitat",
+                         Var == "Richness" ~ "obs. tot. Richness",
+                         Var == "Redlisted" ~ "obs. Redlisted")) %>% 
+  filter(biotope_text != "Övriga") %>% 
+  ggplot(aes(x = biotope_text, y = val, fill = round))+
+  facet_grid(~Var, scales = "free")+
+  geom_bar(stat = "identity", position = "dodge")+
+  theme_bw()+
+  scale_fill_brewer(palette = "Set1")+
+  coord_flip()+
+  labs(x = "", y = "")+
+  theme(legend.position = "bottom")
+```
+
+```{r}
+
+redlist_richness %>% 
+  left_join(biotop_frac) %>% 
+  filter(biotope_text != "Övriga") %>% 
+  ggplot(aes(x = length, y = Richness, colour = round))+
+  geom_point()+
+  theme_bw()+
+  scale_colour_brewer(palette = "Set1")+
+  labs(y = "observed Richness", x = "fraction of habitat")+
+  theme(legend.position = "bottom")
+
+```
+##  Medeltätheter per habitat, Bastardsvärmare, Rödlistade
+
+Butterfly density per habitat per 100 m
+
+```{r}
+RMO_p8 <- 
+RMO_meta %>% 
+  filter(county != "SLU") %>% #exclude SLU
+  filter(SiteType == "S") %>% 
+  filter(!is.na(biotope_text)) %>% 
+  filter(!is.na(length)) %>% 
+  select(ID, OBJECTID, SiteID, segment, length, biotope_text, round) %>% 
+  distinct() %>% 
+  group_by(ID, OBJECTID, SiteID, segment, round) %>% 
+  slice(1) %>% 
+  left_join(RMO_spec) %>% 
+  group_by(OBJECTID, round, biotope_text) %>% 
+  summarise(across(one_of(c("length", colnames(RMO_spec[,-1]))), sum), .groups = "drop") %>% 
+  pivot_longer(one_of(colnames(RMO_spec[,-1])), names_to = "Species", values_to = "Abundance") %>% 
+  group_by(OBJECTID, round, biotope_text) %>% 
+  summarise(Abundance = sum(Abundance),
+            length = unique(length)) %>% 
+  mutate(density = Abundance / (length/100)) 
+
+RMO_p8 %>% 
+  mutate(biotope_text = factor(biotope_text, levels = bio_order)) %>% 
+  filter(biotope_text != "Övriga") %>%
+    ggplot(aes(x = biotope_text, y = density, colour = round))+
+    geom_point(position = position_jitterdodge(jitter.width = 0.2, jitter.height =  0,
+                                               dodge.width = 0.8), size = 0.5, alpha = 0.5)+
+    stat_summary(fun.data = "mean_cl_boot", fatten = 0.8, size = 0.3, colour = "black",
+                 position = position_dodge(width = 0.8), aes(group = round))+
+    theme_bw()+
+    scale_colour_brewer(palette = "Set1")+
+    coord_flip()+
+    labs(x = "", y = "")+
+    theme(legend.position = "bottom")+
+    scale_y_continuous(limits = c(0,15))
+  
+
+```
+
+only redlisted
+```{r}
+
+Redlisted <- 
+  Spec_cat %>% 
+  filter(Redlisted) %>% 
+  filter(SpeciesText %in% colnames(RMO_spec)) %>% 
+  pull(SpeciesText)
+  
+
+
+RMO_p8.1 <- 
+RMO_meta %>% 
+  filter(county != "SLU") %>% #exclude SLU
+  filter(SiteType == "S") %>% 
+  filter(!is.na(biotope_text)) %>% 
+  filter(!is.na(length)) %>% 
+  select(ID, OBJECTID, SiteID, segment, length, biotope_text, round) %>% 
+  distinct() %>% 
+  group_by(ID, OBJECTID, SiteID, segment, round) %>% 
+  slice(1) %>% 
+  left_join(select(RMO_spec, one_of(c("ID", Redlisted)))) %>% 
+  group_by(OBJECTID, round, biotope_text) %>% 
+  summarise(across(one_of(c("length", Redlisted)), sum), .groups = "drop") %>% 
+  pivot_longer(one_of(Redlisted), names_to = "Species", values_to = "Abundance") %>% 
+  group_by(OBJECTID, round, biotope_text) %>% 
+  summarise(Abundance = sum(Abundance),
+            length = unique(length)) %>% 
+  mutate(density = Abundance / (length/100)) 
+
+RMO_p8.1 %>% 
+  mutate(biotope_text = factor(biotope_text, levels = bio_order)) %>% 
+  filter(biotope_text != "Övriga") %>%
+    ggplot(aes(x = biotope_text, y = density, colour = round))+
+    geom_point(position = position_jitterdodge(jitter.width = 0.2, jitter.height =  0,
+                                               dodge.width = 0.8), size = 0.5, alpha = 0.5)+
+    stat_summary(fun.data = "mean_cl_boot", fatten = 0.8, size = 0.3, colour = "black",
+                 position = position_dodge(width = 0.8), aes(group = round))+
+    theme_bw()+
+    scale_colour_brewer(palette = "Set1")+
+    coord_flip()+
+    labs(x = "", y = "")+
+    theme(legend.position = "bottom")+
+    scale_y_continuous(limits = c(0,1))
+
+
+```
+
+
+
 ## Samband mängd nektarkällor och för artantal och individantal
 
 species abundance vs nectar abundance
-richness vs nectar abundance
 
-(now barplot but prob. better scatterplot)
+```{r}
+RMO_p9.1 <- 
+RMO_meta %>% 
+  filter(SiteType == "T") %>% 
+  filter(!is.na(length)) %>% 
+  filter(!is.na(per_mill_flowers)) %>% 
+  select(ID, date, OBJECTID, SiteID, segment, length,per_mill_flowers, round) %>% 
+  distinct() %>% 
+  group_by(ID) %>% 
+  slice(1) %>%  #if there are double entries for the same segment on the same date we chosse the first
+  left_join(RMO_spec) %>% 
+  pivot_longer(one_of(colnames(RMO_spec[,-1])), names_to = "Species", values_to = "Abundance") %>% 
+  group_by(ID) %>% 
+  summarise(Abundance = sum(Abundance),
+            length = unique(length),
+            per_mill_flowers = unique(per_mill_flowers)) %>% 
+  mutate(Density = Abundance/(length/100))
+
+ggplot(RMO_p9.1, aes(x = per_mill_flowers, y = Density))+
+  geom_point(size = 0.8, alpha = 0.4, colour = "deepskyblue4")+
+  geom_smooth(method = "lm", se = F, size = 0.8, colour = "darkred")+
+  scale_y_log10()+
+  scale_x_log10()+
+  theme_bw()+
+  labs(x = "‰ flowers", y = "Abundance / 100m")
+```
+
+barplot
+```{r}
+RMO_p9.1 %>% 
+  mutate(per_mill_flowers_cat = 
+           case_when(per_mill_flowers == 0 ~ "0",
+                     per_mill_flowers <= 1 ~ "0-1",
+                     per_mill_flowers > 1 & per_mill_flowers <= 2 ~ "1-2",
+                     per_mill_flowers > 2 ~ ">2")) %>% 
+  mutate(per_mill_flowers_cat = factor(per_mill_flowers_cat, levels = c("0", "0-1", "1-2", ">2"))) %>% 
+  group_by(per_mill_flowers_cat) %>% 
+  summarise(mean_cl_boot(Density)) %>% 
+  ggplot(aes(x = per_mill_flowers_cat, y = y, ymin = ymin, ymax = ymax))+
+  geom_pointrange(fatten = 0.5)+
+  scale_y_continuous(limits = c(0,NA))+
+  theme_bw()+
+  labs(x = "‰ flowers", y = "Abundance / 100m")
+```
+
+
+richness vs nectar abundance
+```{r}
+
+RMO_p9.2 <- 
+RMO_meta %>% 
+  filter(SiteType == "T") %>% 
+  filter(!is.na(length)) %>% 
+  filter(!is.na(per_mill_flowers)) %>% 
+  select(ID, date, OBJECTID, SiteID, segment, length,per_mill_flowers, round) %>% 
+  distinct() %>% 
+  group_by(ID) %>% 
+  slice(1) %>%  #if there are double entries for the same segment on the same date we chosse the first
+  filter(length > 50 && length < 200) %>% 
+  left_join(RMO_spec) %>% 
+  pivot_longer(one_of(colnames(RMO_spec[,-1])), names_to = "Species", values_to = "Abundance") %>% 
+  mutate(Abundance = ifelse(Abundance > 0, 1, 0)) %>% 
+  group_by(ID) %>% 
+  summarise(Richness = sum(Abundance),
+            length = unique(length),
+            per_mill_flowers = unique(per_mill_flowers)) 
+
+ggplot(RMO_p9.2, aes(x = per_mill_flowers, y = Richness))+
+  geom_point(size = 0.8, alpha = 0.4, colour = "deepskyblue4")+
+  geom_smooth(method = "lm", se = F, size = 0.8, colour = "darkred")+
+  scale_y_log10()+
+  scale_x_log10()+
+  theme_bw()+
+  labs(x = "‰ flowers")
+
+```
+
+
+```{r}
+RMO_p9.2 %>% 
+  mutate(per_mill_flowers_cat = 
+           case_when(per_mill_flowers == 0 ~ "0",
+                     per_mill_flowers <= 1 ~ "0-1",
+                     per_mill_flowers > 1 & per_mill_flowers <= 2 ~ "1-2",
+                     per_mill_flowers > 2 ~ ">2")) %>% 
+  mutate(per_mill_flowers_cat = factor(per_mill_flowers_cat, levels = c("0", "0-1", "1-2", ">2"))) %>% 
+  group_by(per_mill_flowers_cat) %>% 
+  summarise(mean_cl_boot(Richness)) %>% 
+  ggplot(aes(x = per_mill_flowers_cat, y = y, ymin = ymin, ymax = ymax))+
+  geom_pointrange(fatten = 0.5)+
+  scale_y_continuous(limits = c(0,NA))+
+  theme_bw()+
+  labs(x = "‰ flowers", y = "Richness")
+```
+
 
 ## Samband vegetationshöjd och  artantal och individantal
 
-same for vegetation height
+not sure how to do this
+
+Veg height is given in how much of each of three categories. Would need to make a regression analysis for that. 
+
+```{r}
+
+RMO_p10.1 <- 
+RMO_meta %>% 
+  filter(SiteType == "T") %>% 
+  filter(!is.na(length)) %>%
+  select(ID, starts_with("perc_veg_")) %>% 
+  distinct() %>% 
+  group_by(ID) %>% 
+  slice(1) %>%  #if there are double entries for the same segment on the same date we chosse the first
+  pivot_longer(cols = starts_with("perc_veg_"), names_to = "veg_cat", values_to = "veg_height") %>% 
+  group_by(ID) %>% 
+  filter(!all(is.na(veg_height)))
+  select(ID, date, OBJECTID, SiteID, segment, length,per_mill_flowers, round) %>% 
+  distinct() %>% 
+ 
+  left_join(RMO_spec) %>% 
+  pivot_longer(one_of(colnames(RMO_spec[,-1])), names_to = "Species", values_to = "Abundance") %>% 
+  group_by(ID) %>% 
+  summarise(Abundance = sum(Abundance),
+            length = unique(length),
+            per_mill_flowers = unique(per_mill_flowers)) %>% 
+  mutate(Density = Abundance/(length/100))
+
+ggplot(RMO_p9.1, aes(x = per_mill_flowers, y = Density))+
+  geom_point(size = 0.8, alpha = 0.4, colour = "deepskyblue4")+
+  geom_smooth(method = "lm", se = F, size = 0.8, colour = "darkred")+
+  scale_y_log10()+
+  scale_x_log10()+
+  theme_bw()+
+  labs(x = "‰ flowers", y = "Abundance / 100m")
+
+```
+
 
 ## Typiska arter för resp biotop (slingssegmenten)
 
-(should we do some multivar anlaysis here to see what species are sign more abundant in certain biotop type?)
+(should we do some multivarte anlaysis here to see what species are sign more abundant in certain biotop type?)
+
+```{r}
+RMO_p11 <- 
+RMO_meta %>% 
+  filter(county != "SLU") %>% #exclude SLU
+  filter(SiteType == "S") %>% 
+  filter(!is.na(biotope_text)) %>% 
+  filter(!is.na(length)) %>% 
+  select(ID, OBJECTID, SiteID, segment, length, biotope_text) %>% 
+  distinct() %>% 
+  group_by(ID, OBJECTID, SiteID, segment) %>% 
+  slice(1) %>% 
+  left_join(RMO_spec) %>% 
+  group_by(biotope_text) %>% 
+  summarise(across(one_of( colnames(RMO_spec[,-1])), sum), .groups = "drop") %>% 
+  pivot_longer(one_of(colnames(RMO_spec[,-1])), names_to = "Species", values_to = "Abundance") %>% 
+  group_by(biotope_text, Species) %>% 
+  summarise(Abundance = sum(Abundance)) %>% 
+  group_by(Species) %>% 
+  mutate(Abundance = Abundance / sum(Abundance)) %>% #standardise by total counts of Species
+  group_by(Species) %>% 
+  mutate(rel_abund = Abundance / sum(Abundance)) #get rel abundance 
+
+p11 <- 
+RMO_p11 %>% 
+  mutate(biotope_text = factor(biotope_text, levels = bio_order)) %>% 
+  filter(biotope_text != "Övriga") %>%
+    ggplot(aes(x = biotope_text, y = Species, fill = rel_abund))+
+    geom_tile()+
+    theme_bw()+
+    scale_fill_viridis_c()+
+  theme(axis.text.x = element_text(angle  = -90, hjust = 0))
+
+p11
+```
+
+
 
 ## Trend analysis 
 
@@ -243,13 +974,146 @@ Is this dealt with?
 
 ## Jmf av artsammansättning mellan länen och de ingående objekten
 
-NMDS (or here CCA) of species composition between 6 län
+```{r}
+RMO_12 <- 
+RMO_meta %>% 
+  #filter(SiteType == "T") %>% 
+  select(ID, OBJECTID, County_text) %>% 
+  distinct() %>% 
+  group_by(ID) %>% 
+  dplyr::slice(1) %>% 
+  left_join(RMO_spec) %>% 
+  group_by(OBJECTID, County_text) %>% 
+  summarise(across(one_of( colnames(RMO_spec[,-1])), sum), .groups = "drop") 
 
-same for 'lab' (what is lab)
+RMO_12_meta <- 
+  RMO_12 %>% 
+  select(County_text, OBJECTID) %>% 
+  mutate(ID = paste(County_text, OBJECTID)) %>% 
+   as.data.frame() %>% 
+  `rownames<-`(.$ID)
+
+RMO_12_mat <- 
+  RMO_12 %>% 
+  select(-County_text, -OBJECTID) %>% 
+  as.matrix() %>% 
+  `rownames<-`(RMO_12_meta$ID)
+
+RMO_12_ps = phyloseq(otu_table(RMO_12_mat, taxa_are_rows = FALSE),
+                     sample_data(RMO_12_meta))
+
+RMO_12_dd <- phyloseq_to_deseq2(RMO_12_ps, ~ County_text)
+
+RMO_12_dd = DESeq(RMO_12_dd, test="Wald", fitType="parametric", sfType = "poscounts")
+
+RMO_12_vst <- getVarianceStabilizedData(RMO_12_dd) %>% t()
+
+RMO_12_vst[RMO_12_vst < 0] <- 0
+
+RMO_12_vst_d <- vegdist(RMO_12_vst, "bray")
+  
+RMO_12_nmds <- metaMDS(RMO_12_vst, autotransform = FALSE, sep = 50)
+
+RMO_12_points <- 
+RMO_12_nmds$points %>% 
+  as_tibble(rownames = "ID") %>% 
+  left_join(RMO_12_meta)
+
+RMO_hull_12 <- RMO_12_points %>% 
+  group_by(County_text) %>% 
+  dplyr::slice(chull(MDS1, MDS2))
+  
+ggplot(RMO_12_points, aes(x = MDS1, y = MDS2, colour = County_text))+
+  geom_point()+
+  geom_polygon(data = RMO_hull_12, fill = NA, size = 0.2)+
+  theme_bw()+
+  scale_colour_brewer(palette = "Set1")
+  
+#stressplot(RMO_12_nmds)
+```
+
+
 
 ## Jmf artsammansättningen för de olika biotoptyperna (sling segmenten)
 
-same as above for different biotop types
+its messy as there are a lot of habitats...
+
+Also, I cannot plot the single sites as even after pooling multiple visits they have just too few observations per habitat to calculate a realistic beta-diversity. 
+
+Therefore I pool habitats by county, but that (of course) removes a lot of variability. 
+
+```{r}
+RMO_13 <- 
+RMO_meta %>% 
+  select(ID, OBJECTID, biotope_text, SiteType, County_text) %>% 
+  filter(SiteType == "S") %>% 
+  distinct() %>% 
+  group_by(ID) %>% 
+  dplyr::slice(1) %>%
+  filter(!is.na(biotope_text)) %>% 
+  left_join(RMO_spec) %>% 
+  group_by(County_text, biotope_text) %>% 
+  summarise(across(one_of( colnames(RMO_spec[,-1])), sum), .groups = "drop") 
+
+RMO_13_meta <- 
+  RMO_13 %>% 
+  select(County_text, biotope_text) %>% 
+  mutate(ID = paste(County_text, biotope_text)) %>% 
+  as.data.frame() %>% 
+  `rownames<-`(.$ID)
+
+RMO_13_mat <- 
+  RMO_13 %>% 
+  select(-County_text, -biotope_text) %>% 
+  as.matrix() %>% 
+  `rownames<-`(RMO_13_meta$ID)
+
+RMO_13_mat <- RMO_13_mat[rowSums(RMO_13_mat) > 0,]
+
+RMO_13_ps = phyloseq(otu_table(RMO_13_mat, taxa_are_rows = FALSE),
+                     sample_data(RMO_13_meta))
+
+RMO_13_dd <- phyloseq_to_deseq2(RMO_13_ps, ~ biotope_text)
+
+RMO_13_dd = DESeq(RMO_13_dd, test="Wald", fitType="parametric", sfType = "poscounts")
+
+RMO_13_vst <- getVarianceStabilizedData(RMO_13_dd) %>% t()
+
+RMO_13_vst[RMO_13_vst < 0] <- 0
+
+RMO_13_vst <- RMO_13_vst[rowSums(RMO_13_vst) > 0,]
+
+RMO_13_vst_d <- vegdist(RMO_13_vst)
+#RMO_13_vst_d_s <- stepacross(RMO_13_vst_d)
+
+RMO_13_nmds <- metaMDS(RMO_13_vst_d, autotransform = FALSE, try = 50)
+
+RMO_13_points <- 
+RMO_13_nmds$points %>% 
+  as_tibble(rownames = "ID") %>% 
+  left_join(RMO_13_meta)
+
+RMO_hull_13 <- RMO_13_points %>% 
+  group_by(biotope_text) %>% 
+  dplyr::slice(chull(MDS1, MDS2))
+  
+ggplot(RMO_13_points, aes(x = MDS1, y = MDS2, colour = biotope_text))+
+  geom_point()+
+  geom_polygon(data = RMO_hull_13, fill = NA)+
+  theme_bw()
+  scale_colour_brewer(palette = "Set1")
+  
+  RMO_hull_13_c <- RMO_13_points %>% 
+  group_by(County_text) %>% 
+  dplyr::slice(chull(MDS1, MDS2))
+  
+ggplot(RMO_13_points, aes(x = MDS1, y = MDS2, colour = County_text))+
+  geom_point()+
+  geom_polygon(data = RMO_hull_13_c, fill = NA)+
+  theme_bw()+
+  scale_colour_brewer(palette = "Set1")
+  
+```
 
 ## Vilka parametrar (nektarrikedom, veghöjd…) viktiga för olika arterna?
 
@@ -264,6 +1128,25 @@ Q: What env variables do we want to include here?
 
 
 
+```{r}
+RMO_meta %>% 
+  mutate(county = ifelse(county != "SLU", County_text, "SLU")) %>% 
+  select(county, OBJECTID, SiteType, segment, length) %>% 
+  mutate(length = !is.na(length)) %>% 
+  group_by(OBJECTID) %>% 
+  mutate(N_segments = length(unique(segment))) %>% 
+  select(-segment) %>% 
+  distinct() %>% 
+  group_by(county, SiteType, length) %>% 
+  summarise(N_sites = length(unique(OBJECTID)),
+            N_segments = round(mean(N_segments)))%>% 
+  write_clip
+
+
+RMO_spat %>% st_crs()
+  dplyr::filter(county != "SLU") %>% 
+  st_write(., "LST_midpoint.csv", layer_options = "GEOMETRY=AS_XY")
+```
 
 
 
