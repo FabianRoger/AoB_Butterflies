@@ -66,6 +66,9 @@ Var_RMO %>%
 
 #spatial data
 RMO_spat <- read_excel("RMO_combined_data_updated.xlsx", sheet = "site_geo")
+
+# TUVA (AOB) shape-file
+TUVA <- read_sf(here("TUVA", "AoB_2019.shp"))
 ```
 
 ## check variables
@@ -793,6 +796,45 @@ RMO_spat %>%
   mutate(SiteID = as.character(SiteID)) %>% 
   left_join(., distinct(select(RMO, SiteID, SiteText, SiteType, county, County_text)))
 ```
+
+# matching with TUVA objects
+```{r}
+TUVA <- st_transform(TUVA, st_crs(RMO_spat)) %>% 
+  st_make_valid(.)
+
+TUVA <- 
+TUVA %>% 
+  filter(gsub("(\\w).+", "\\1", Län) %in% unique(RMO_spat$county))
+
+TUVA_RMO <- 
+RMO_spat %>% 
+  st_buffer(1000) %>% 
+  st_intersects(.,TUVA, )
+
+TUVA <- TUVA %>% 
+  slice(unique( unlist( TUVA_RMO)))
+
+TUVA_RMO_nearest <- 
+RMO_spat %>% 
+  st_nearest_feature(.,TUVA)
+
+RMO_spat <- 
+TUVA %>% 
+  slice(TUVA_RMO_nearest) %>% 
+  select(OBJECTID, Markslag) %>% 
+  st_set_geometry(NULL) %>% 
+  bind_cols(RMO_spat, .)
+
+# check if each SiteText is assigned to a single TUVA object
+RMO_spat %>% 
+  group_by(SiteText) %>% 
+  summarise(unique(OBJECTID)) %>% 
+  group_by(SiteText) %>% 
+  filter(n() > 1)
+  
+```
+
+
 
 ##export
 ```{r}
