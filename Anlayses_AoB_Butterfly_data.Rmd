@@ -62,13 +62,13 @@ RMO %>%
 
 RMO
 
-library(sf)
-library(here)
-test <- read_sf(here("length", "LST_at_the_beginning.shp"))
-test$MERGE_SRC %>% unique()
+#library(sf)
+#library(here)
+#test <- read_sf(here("length", "LST_at_the_beginning.shp"))
+#test$MERGE_SRC %>% unique()
 
 
-test <- read_sf(here("length", "FjarilsInv_ytor_tom2019.shp"))
+#test <- read_sf(here("length", "FjarilsInv_ytor_tom2019.shp"))
 
 ```
 
