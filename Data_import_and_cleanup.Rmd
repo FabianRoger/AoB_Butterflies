@@ -412,7 +412,7 @@ RMO %>%
   filter(perc_veg_100 != 100) %>% 
   distinct() 
 
-# for about 14% of the Site x segment x dates combinations, the perc vegetation does not add up to 100
+# for about 14% of the Site x segment x dates combinations, the prc vegetation does not add up to 100
 paste("percentage of Site x segment x dates combination were sum(% veg) is not 100: ", nrow(not_100)/17757*100)
 
 #over 100
@@ -460,7 +460,7 @@ not_100 %>%
 Only transects should have data on vegetation cover. Most have, but there are problems:
 
 1) not all cover add to 100. This could be genuine as the observers can count other surfaces.
-2) some cover adds to >100 --> chack manually
+2) some cover adds to >100 --> check manually
 3) 0s are coded as NA's in some cases --> we code all NAs in rows with data as 0s
 4) some sites record what veg is present (with "x") --> we replace it by 100%
 5) some NAs are coded as character "NA" --> make real NA

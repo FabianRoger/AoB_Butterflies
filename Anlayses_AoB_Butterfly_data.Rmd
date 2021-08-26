@@ -28,6 +28,8 @@ library(ggsn)
 library(iNEXT)
 library(readxl)
 library(vegan)
+library(here)
+library(phyloseq)
 
 #source("estimateD_func.r")
 ```
@@ -44,6 +46,31 @@ Spec_cat <- read_excel("Species_meta_check.xlsx", sheet = "final")
 ```
 
 
+```{r}
+##CHECK WHY ÖREBRO IS FALLING OUT (LENGTH)
+
+RMO %>% 
+  dplyr::select(SiteID, SiteType, length, county, County_text, date) %>%
+  distinct() %>% 
+  group_by(SiteID, SiteType, county, County_text) %>% 
+  mutate(date = 1:n()) %>% 
+  pivot_wider(names_from = date, values_from = length) %>% 
+  dplyr::select(1:6) %>%
+  #arrange(SiteID)
+  group_by(SiteType, county, County_text) %>% 
+  summarise(sum(is.na(`1`)) / n()) 
+
+RMO
+
+library(sf)
+library(here)
+test <- read_sf(here("length", "LST_at_the_beginning.shp"))
+test$MERGE_SRC %>% unique()
+
+
+test <- read_sf(here("length", "FjarilsInv_ytor_tom2019.shp"))
+
+```
 
 #prepare data
 
@@ -194,6 +221,8 @@ ggplot()+
   north(NILS)+
   scalebar(NILS, dist = 100, dist_unit = "km",
              transform = FALSE, st.size = 2)
+
+ggsave(here("figures", "survey_sites.pdf"))
 
 ```
 Fig 1B	Distribution of valuable seminatural grasslands needed (SJV)
@@ -363,9 +392,9 @@ RMO_spat %>%
   geom_sf(data = filter(NILS, OBJECTID < 7), 
           aes(fill = StratumNam), alpha = 0.6, 
           size = 0.05,  show.legend = F)+
-  geom_sf(size = 0.5, aes(colour = `q = 0`))+
+  geom_sf(size = 1, aes(colour = `q = 0`), alpha = 0.6)+
   facet_wrap(~round)+
-  scale_colour_viridis_c(option = "plasma")+
+  scale_colour_viridis_c(option = "turbo")+
   scale_fill_manual(values = map_cols)+
    theme_map()+
   # theme(legend.position = "right")+
@@ -377,8 +406,10 @@ RMO_spat %>%
   ggtitle("average S, all species")+
   theme(legend.position = "bottom")
   
+ggsave(here("figures", "estimated_richness_all_spec.pdf"), p1)
 
 p1
+
 
 ```
 
@@ -387,15 +418,16 @@ Same as above for Species defines as grassland specialist
 
 Is it valid to do that? Can I subset data to specialist and then extrapolate N of expected specialist?
 
+**change colour scale**
+
 ```{r}
 
 grassland <- 
   Spec_cat %>% 
-  filter(Grassland_spec) %>% 
+  filter(Grassland_specialist) %>% 
   pull(SpeciesText)
-  
 
-RMO_spec_pooled_grass <- RMO_spec_pooled[,grassland]
+RMO_spec_pooled_grass <- RMO_spec_pooled[,colnames(RMO_spec_pooled) %in% grassland]
 RMO_spec_pooled_grass <- RMO_spec_pooled_grass[rowSums(RMO_spec_pooled_grass) > 0,]
 
 RMO_est_grass <- 
@@ -417,9 +449,9 @@ RMO_spat %>%
   geom_sf(data = filter(NILS, OBJECTID < 7), 
           aes(fill = StratumNam), alpha = 0.6, 
           size = 0.05,  show.legend = F)+
-  geom_sf(size = 0.5, aes(colour = `q = 0`))+
+  geom_sf(size = 1, aes(colour = `q = 0`), alpha = 0.6)+
   facet_wrap(~round)+
-  scale_colour_viridis_c(option = "plasma")+
+  scale_colour_viridis_c(option = "turbo")+
   scale_fill_manual(values = map_cols)+
    theme_map()+
   # theme(legend.position = "right")+
@@ -431,7 +463,7 @@ RMO_spat %>%
   ggtitle("estimated number of grassland specialist")+
   theme(legend.position = "bottom")
   
-
+ggsave(here("figures", "estimated_richness_grassland.pdf"), p2)
 
 p2
 ```
@@ -442,6 +474,8 @@ p2
 vertical barplot of total number of individuals by species (for all species), by round and type
 
 (should it be average per year?)
+
+**change order to have segment next to each other faceting**
 ```{r}
 
 RMO_tot_ind <- 
@@ -480,11 +514,13 @@ RMO_spec_ind %>%
   mutate(Species = factor(Species, levels = spec_order)) %>% 
   ggplot(aes(x = Species, y = Abundance))+
   geom_bar(stat = "identity")+
-  facet_wrap(~ round * SiteType, nrow = 1)+
+  facet_wrap(~SiteType*round, nrow = 1)+
   coord_flip()
   #theme_excel_new()
 
 p3
+
+ggsave(here("figures", "N°of_Ind_per_year.pdf"), p3, height = 8, width = 8)
 ```
 
 Q: which year? (Are there several?)
@@ -523,6 +559,9 @@ RMO_p5 %>%
   theme_excel_new()+
   scale_fill_brewer(palette = "Set1")
 
+ggsave(here("figures", "N_spec_per_observation.pdf"))
+
+
 ```
 
 
@@ -553,7 +592,7 @@ RMO_p6 %>%
 RMO_out_bio <- 
   RMO_mat_bio %>%
   t() %>% 
-  iNEXT(datatype = "abundance", q = c(0,1),
+  iNEXT(datatype = "abundance", q = c(0),
                     nboot = 1) 
 
 RMO_out_bio$iNextEst %>% 
@@ -564,9 +603,11 @@ RMO_out_bio$iNextEst %>%
   geom_point(data = . %>% filter(method == "observed"), size = 0.1, colour = "black")+
   facet_wrap(~biotope_text)+
   scale_x_continuous(limits = c(0,5000))
+
+ggsave(here("figures", "richness_by_biotope_type_rarecurves.pdf"))
 ```
 
-
+**just show richnes**
 
 ```{r}
 
@@ -587,7 +628,7 @@ bio_order <-
   filter(order == 0) %>% 
   group_by(biotope_text) %>% 
   summarise(qD = mean(qD)) %>% 
-  arrange(qD) %>% 
+  arrange(desc(qD)) %>% 
   pull(biotope_text)
 
 bio_obs <- 
@@ -598,22 +639,23 @@ bio_obs <-
   filter(biotope_text != "Övriga")
     
 RMO_bio_div %>%
-  filter(order < 2) %>% 
+  filter(order == 0) %>% 
   filter(biotope_text != "Övriga") %>% 
   mutate(biotope_text = factor(biotope_text, levels = bio_order)) %>% 
   ggplot(aes(x = biotope_text, y = qD, ymin = qD.LCL, ymax = qD.UCL, colour = round))+
   geom_pointrange(fatten = 1, position = position_dodge(width = 0.8))+
   geom_point(data = bio_obs, size = 1,alpha = 0.5,
              position = position_dodge(width = 0.8))+
-  facet_grid(~order, scales = "free_y")+
+  #facet_grid(~order, scales = "free_y")+
   scale_y_continuous(limits = c(0, NA))+
-  coord_flip()+
+  #coord_flip()+
   scale_colour_brewer(palette = "Set1")+
   labs(y = "Richness", x = "")+
   theme_bw()+
-  theme(legend.position = "bottom")
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, hjust = 1))
   
-  
+ggsave(here("figures", "richness_by_biotope_type.pdf"))
 
 ```
 
@@ -679,6 +721,8 @@ redlist_richness %>%
   coord_flip()+
   labs(x = "", y = "")+
   theme(legend.position = "bottom")
+
+ggsave(here("figures", "observed_richness_by_biotope.pdf"))
 ```
 
 ```{r}
@@ -733,7 +777,7 @@ RMO_p8 %>%
     theme(legend.position = "bottom")+
     scale_y_continuous(limits = c(0,15))
   
-
+ggsave(here("figures", "density_per_100m_per_biotop.pdf"))
 ```
 
 only redlisted
@@ -779,14 +823,16 @@ RMO_p8.1 %>%
     coord_flip()+
     labs(x = "", y = "")+
     theme(legend.position = "bottom")+
-    scale_y_continuous(limits = c(0,1))
+    scale_y_log10()
 
-
+ggsave(here("figures", "density_redlisted_per_100m_per_biotop.pdf"))
 ```
 
 
 
 ## Samband mängd nektarkällor och för artantal och individantal
+
+**split by round**
 
 species abundance vs nectar abundance
 
@@ -815,6 +861,8 @@ ggplot(RMO_p9.1, aes(x = per_mill_flowers, y = Density))+
   scale_x_log10()+
   theme_bw()+
   labs(x = "‰ flowers", y = "Abundance / 100m")
+
+ggsave(here("figures", "flower_dens_vs_butterfly_dens.pdf"))
 ```
 
 barplot
@@ -833,6 +881,8 @@ RMO_p9.1 %>%
   scale_y_continuous(limits = c(0,NA))+
   theme_bw()+
   labs(x = "‰ flowers", y = "Abundance / 100m")
+
+ggsave(here("figures", "flower_dens_vs_butterfly_dens[grouped].pdf"))
 ```
 
 
@@ -865,6 +915,8 @@ ggplot(RMO_p9.2, aes(x = per_mill_flowers, y = Richness))+
   theme_bw()+
   labs(x = "‰ flowers")
 
+ggsave(here("figures", "flower_dens_vs_richness.pdf"))
+
 ```
 
 
@@ -883,6 +935,8 @@ RMO_p9.2 %>%
   scale_y_continuous(limits = c(0,NA))+
   theme_bw()+
   labs(x = "‰ flowers", y = "Richness")
+
+ggsave(here("figures", "flower_dens_vs_richness[grouped].pdf"))
 ```
 
 
@@ -941,17 +995,17 @@ RMO_meta %>%
   select(ID, OBJECTID, SiteID, segment, length, biotope_text) %>% 
   distinct() %>% 
   group_by(ID, OBJECTID, SiteID, segment) %>% 
-  slice(1) %>% 
+  dplyr::slice(1) %>% 
   left_join(RMO_spec) %>% 
   group_by(biotope_text) %>% 
   summarise(across(one_of( colnames(RMO_spec[,-1])), sum), .groups = "drop") %>% 
   pivot_longer(one_of(colnames(RMO_spec[,-1])), names_to = "Species", values_to = "Abundance") %>% 
-  group_by(biotope_text, Species) %>% 
-  summarise(Abundance = sum(Abundance)) %>% 
   group_by(Species) %>% 
-  mutate(Abundance = Abundance / sum(Abundance)) %>% #standardise by total counts of Species
+  filter(sum(Abundance) > 0) %>% 
+  group_by(biotope_text) %>% 
+  mutate(Abundance = Abundance / sum(Abundance, na.rm = TRUE)) %>% #standardise by total observations in bitopoe
   group_by(Species) %>% 
-  mutate(rel_abund = Abundance / sum(Abundance)) #get rel abundance 
+  mutate(rel_abund = Abundance / sum(Abundance, na.rm = TRUE)) #get rel abundance 
 
 p11 <- 
 RMO_p11 %>% 
@@ -964,6 +1018,8 @@ RMO_p11 %>%
   theme(axis.text.x = element_text(angle  = -90, hjust = 0))
 
 p11
+
+ggsave(here("figures", "typical_species.pdf"), width = 8, height = 10)
 ```
 
 
