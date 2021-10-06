@@ -19,6 +19,7 @@ load packages
 
 ```{r}
 library(dplyr)
+library(here)
 library(tidyr)
 library(readxl)
 library(sf)
@@ -60,9 +61,9 @@ RMO <- read_excel("RMO_combined_data_updated.xlsx", sheet = "all_observations_cl
 #variable description
 Var_RMO <- read_excel("RMO_combined_data_updated.xlsx", sheet = 1)
 
-Var_RMO %>%
-  filter(Variable %in% colnames(RMO)) %>%
-  View(., title = "Variables")
+# Var_RMO %>%
+#   filter(Variable %in% colnames(RMO)) %>%
+#   View(., title = "Variables")
 
 #spatial data
 RMO_spat <- read_excel("RMO_combined_data_updated.xlsx", sheet = "site_geo")
