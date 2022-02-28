@@ -22,6 +22,7 @@ library(ggthemes)
 library(sf)
 library(dplyr)
 library(tidyr)
+library(readr)
 library(lubridate)
 library(RColorBrewer)
 library(ggsn)
@@ -30,6 +31,8 @@ library(readxl)
 library(vegan)
 library(here)
 library(phyloseq)
+library(Hmisc)
+library(DESeq2)
 
 #source("estimateD_func.r")
 ```
@@ -43,24 +46,68 @@ NILS <- read_sf("NILS_sw99_NILS_Stratum_SW99.shp")
 
 Spec_cat <- read_excel("Species_meta_check.xlsx", sheet = "final")
 
+RMO_len <- read_csv("calculated_length.csv")
+
+RMO_len <- 
+RMO_len %>% 
+  select(sit_uid, seg_sequence, 
+         vis_begintime, 
+         calculated_length) %>% 
+  dplyr::rename(SiteID = sit_uid, 
+                date = vis_begintime,
+                segment = seg_sequence
+                ) %>% 
+  mutate(date = as.Date(date)) %>% 
+  distinct() 
+
+missing_len <-   
+RMO %>% 
+  select(SiteID, segment, date) %>% 
+  mutate(SiteID = as.numeric(SiteID)) %>% 
+  distinct() %>% 
+  left_join(select(RMO_len, -date)) %>% 
+  filter(is.na(calculated_length))
+
+missing_len %>% 
+write_csv("missing_lenght.txt")
+
+RMO <- 
+  RMO %>% 
+  mutate(SiteID = as.numeric(SiteID)) %>% 
+  left_join(RMO_len) %>% 
+  distinct()
+
+RMO %>%
+  select(SiteText, date, county, length, calculated_length) %>% 
+  distinct() %>% 
+  group_by(SiteText, date, county) %>% 
+ # summarise(length = sum(length), calculated_length = sum(calculated_length)) %>% 
+ # filter(length > 1.1*calculated_length) #%>%
+  ggplot(aes(x = length,y = calculated_length, colour = county))+
+  geom_point(alpha = 0.5, size = 1)+
+  facet_wrap(~county)
+
+###
+
+# TAKE length data from SLU from original data #
+
+###
+
+
 ```
 
 
 ```{r}
-##CHECK WHY ÖREBRO IS FALLING OUT (LENGTH)
-
 RMO %>% 
-  dplyr::select(SiteID, SiteType, length, county, County_text, date) %>%
+  dplyr::select(SiteID, SiteType, calculated_length, county, County_text, date) %>%
   distinct() %>% 
   group_by(SiteID, SiteType, county, County_text) %>% 
   mutate(date = 1:n()) %>% 
-  pivot_wider(names_from = date, values_from = length) %>% 
+  pivot_wider(names_from = date, values_from = calculated_length) %>% 
   dplyr::select(1:6) %>%
   #arrange(SiteID)
   group_by(SiteType, county, County_text) %>% 
   summarise(sum(is.na(`1`)) / n()) 
-
-RMO
 
 #library(sf)
 #library(here)
@@ -70,6 +117,12 @@ RMO
 
 #test <- read_sf(here("length", "FjarilsInv_ytor_tom2019.shp"))
 
+# missing length
+RMO %>% 
+  filter(County_text == "Skåne") %>% 
+  select( SiteID, SiteType, segment, length) %>% 
+  distinct() %>% 
+  filter(is.na(length))
 ```
 
 #prepare data
@@ -84,11 +137,12 @@ split data into metadata (`RMO_meta`) and a Species matrix (`RMO_spec`), identif
 
 RMO_meta <- 
   RMO %>%
-  select(-SpeciesID, -SpeciesText, -count) %>% 
+  select(-SpeciesID, -SpeciesText, -count, -length) %>% # replace length variable
+  dplyr::rename(length = calculated_length) %>% 
   distinct() %>% 
   mutate(ID = paste(date, SiteID, segment, sep = "_")) %>% 
+  mutate(SiteID = as.character(SiteID)) %>% 
   left_join(st_set_geometry(RMO_spat, NULL))  #join AOB site ID
-
 ```
 
 
@@ -148,7 +202,7 @@ RMO_meta %>%
   group_by(county, SiteType) %>% 
   summarise(prct_no_len = round(sum(length)/n()*100)) %>% 
   left_join(filter(distinct(select(RMO_meta, county, County_text)), county != "SLU")) %>% 
-  select(County_text, county, SiteType, prct_no_len)
+  select(County_text, county, SiteType, prct_no_len) 
   
 ```
 
@@ -222,7 +276,7 @@ ggplot()+
   scalebar(NILS, dist = 100, dist_unit = "km",
              transform = FALSE, st.size = 2)
 
-ggsave(here("figures", "survey_sites.pdf"))
+#ggsave(here("figures", "survey_sites.pdf"))
 
 ```
 Fig 1B	Distribution of valuable seminatural grasslands needed (SJV)
@@ -286,7 +340,7 @@ pool transect and dates
 
 RMO_meta_pooled <- 
   RMO_meta %>% 
-  filter(SiteType == "T") %>% #keep only trasnect
+  filter(SiteType == "T") %>% #keep only transect
   select(OBJECTID, round, ID, County_text, county) %>% 
   group_by(County_text, county, OBJECTID, round) %>% 
   summarise(ID = list(unique(ID))) %>% # get a list of what unique transect x date x round ID should be grouped
@@ -333,7 +387,7 @@ We see that most sites have actually quite decent sample completeness, of >60 an
 We exclude site with a sample completeness < 60% as the extrapolated diversity from low completeness sites is uncertain and only few sites have this low 
 ```{r}
 out$DataInfo %>% 
-  rename("p_ID" = site) %>% 
+  dplyr::rename("p_ID" = site) %>% 
   left_join(RMO_meta_pooled) %>% 
   select(-ID) %>% 
   ggplot(aes(x = SC))+
@@ -592,19 +646,25 @@ RMO_p6 %>%
 RMO_out_bio <- 
   RMO_mat_bio %>%
   t() %>% 
-  iNEXT(datatype = "abundance", q = c(0),
+  iNEXT(datatype = "abundance", q = c(0), knots = 80,
                     nboot = 1) 
 
 RMO_out_bio$iNextEst %>% 
   bind_rows(.id = "ID") %>% 
   separate(ID, into = c("round", "biotope_text"), sep = "__") %>% 
-  ggplot(aes(x = m, y = qD, linetype = as.factor(order), colour = round))+
+  ggplot(aes(x = m, y = qD, colour = round))+
   geom_line()+
-  geom_point(data = . %>% filter(method == "observed"), size = 0.1, colour = "black")+
+  geom_point(data = . %>% filter(method == "observed"), size = 0.2, colour = "black")+
   facet_wrap(~biotope_text)+
-  scale_x_continuous(limits = c(0,5000))
+  scale_x_continuous(limits = c(0,5000))+
+  theme_bw()+
+  scale_color_brewer(palette = "Set1")+
+  theme(axis.text.x = element_text(angle = -45, hjust = 0))+
+  labs(y = "species richness", x = "number of counted individuals")
 
 ggsave(here("figures", "richness_by_biotope_type_rarecurves.pdf"))
+
+?iNEXT
 ```
 
 **just show richnes**
@@ -676,7 +736,7 @@ RMO_meta %>%
   select(OBJECTID, SiteID, segment, length, biotope_text, round) %>% 
   distinct() %>% 
   group_by(OBJECTID, SiteID, segment, round) %>% 
-  slice(1) %>% 
+  dplyr::slice(1) %>% 
   group_by(biotope_text, round) %>% 
   summarise(length = sum(length)) %>% 
   group_by(round) %>% 
@@ -699,7 +759,7 @@ redlist_richness <-
    group_by(round, biotope_text, Redlisted) %>% 
    summarise(Richness = sum(presence)) %>% 
   pivot_wider(names_from = Redlisted, values_from = Richness) %>% 
-  rename("Redlisted" = "TRUE", "Richness" = "FALSE")%>% 
+  dplyr::rename("Redlisted" = "TRUE", "Richness" = "FALSE")%>% 
   mutate(Richness = Redlisted + Richness) 
  
 
@@ -752,7 +812,7 @@ RMO_meta %>%
   select(ID, OBJECTID, SiteID, segment, length, biotope_text, round) %>% 
   distinct() %>% 
   group_by(ID, OBJECTID, SiteID, segment, round) %>% 
-  slice(1) %>% 
+  dplyr::slice(1) %>% 
   left_join(RMO_spec) %>% 
   group_by(OBJECTID, round, biotope_text) %>% 
   summarise(across(one_of(c("length", colnames(RMO_spec[,-1]))), sum), .groups = "drop") %>% 
@@ -800,7 +860,7 @@ RMO_meta %>%
   select(ID, OBJECTID, SiteID, segment, length, biotope_text, round) %>% 
   distinct() %>% 
   group_by(ID, OBJECTID, SiteID, segment, round) %>% 
-  slice(1) %>% 
+  dplyr::slice(1) %>% 
   left_join(select(RMO_spec, one_of(c("ID", Redlisted)))) %>% 
   group_by(OBJECTID, round, biotope_text) %>% 
   summarise(across(one_of(c("length", Redlisted)), sum), .groups = "drop") %>% 
@@ -823,7 +883,7 @@ RMO_p8.1 %>%
     coord_flip()+
     labs(x = "", y = "")+
     theme(legend.position = "bottom")+
-    scale_y_log10()
+    scale_y_continuous(limits = c(0,1))
 
 ggsave(here("figures", "density_redlisted_per_100m_per_biotop.pdf"))
 ```
@@ -844,11 +904,11 @@ RMO_meta %>%
   filter(!is.na(per_mill_flowers)) %>% 
   select(ID, date, OBJECTID, SiteID, segment, length,per_mill_flowers, round) %>% 
   distinct() %>% 
-  group_by(ID) %>% 
-  slice(1) %>%  #if there are double entries for the same segment on the same date we chosse the first
+  group_by(round, ID) %>% 
+  dplyr::slice(1) %>%  #if there are double entries for the same segment on the same date we choose the first
   left_join(RMO_spec) %>% 
   pivot_longer(one_of(colnames(RMO_spec[,-1])), names_to = "Species", values_to = "Abundance") %>% 
-  group_by(ID) %>% 
+  group_by(round, ID) %>% 
   summarise(Abundance = sum(Abundance),
             length = unique(length),
             per_mill_flowers = unique(per_mill_flowers)) %>% 
@@ -859,6 +919,7 @@ ggplot(RMO_p9.1, aes(x = per_mill_flowers, y = Density))+
   geom_smooth(method = "lm", se = F, size = 0.8, colour = "darkred")+
   scale_y_log10()+
   scale_x_log10()+
+  facet_wrap(~round)+
   theme_bw()+
   labs(x = "‰ flowers", y = "Abundance / 100m")
 
@@ -874,13 +935,14 @@ RMO_p9.1 %>%
                      per_mill_flowers > 1 & per_mill_flowers <= 2 ~ "1-2",
                      per_mill_flowers > 2 ~ ">2")) %>% 
   mutate(per_mill_flowers_cat = factor(per_mill_flowers_cat, levels = c("0", "0-1", "1-2", ">2"))) %>% 
-  group_by(per_mill_flowers_cat) %>% 
+  group_by(round, per_mill_flowers_cat) %>% 
   summarise(mean_cl_boot(Density)) %>% 
-  ggplot(aes(x = per_mill_flowers_cat, y = y, ymin = ymin, ymax = ymax))+
-  geom_pointrange(fatten = 0.5)+
+  ggplot(aes(x = per_mill_flowers_cat, y = y, ymin = ymin, ymax = ymax, colour = round))+
+  geom_pointrange(fatten = 0.5, position = position_dodge(width = 0.2))+
   scale_y_continuous(limits = c(0,NA))+
   theme_bw()+
-  labs(x = "‰ flowers", y = "Abundance / 100m")
+  labs(x = "‰ flowers", y = "Abundance / 100m")+
+  scale_color_brewer(palette = "Set1")
 
 ggsave(here("figures", "flower_dens_vs_butterfly_dens[grouped].pdf"))
 ```
@@ -896,13 +958,13 @@ RMO_meta %>%
   filter(!is.na(per_mill_flowers)) %>% 
   select(ID, date, OBJECTID, SiteID, segment, length,per_mill_flowers, round) %>% 
   distinct() %>% 
-  group_by(ID) %>% 
-  slice(1) %>%  #if there are double entries for the same segment on the same date we chosse the first
+  group_by(round, ID) %>% 
+  dplyr::slice(1) %>%  #if there are double entries for the same segment on the same date we chosse the first
   filter(length > 50 && length < 200) %>% 
   left_join(RMO_spec) %>% 
   pivot_longer(one_of(colnames(RMO_spec[,-1])), names_to = "Species", values_to = "Abundance") %>% 
   mutate(Abundance = ifelse(Abundance > 0, 1, 0)) %>% 
-  group_by(ID) %>% 
+  group_by(round, ID) %>% 
   summarise(Richness = sum(Abundance),
             length = unique(length),
             per_mill_flowers = unique(per_mill_flowers)) 
@@ -912,6 +974,7 @@ ggplot(RMO_p9.2, aes(x = per_mill_flowers, y = Richness))+
   geom_smooth(method = "lm", se = F, size = 0.8, colour = "darkred")+
   scale_y_log10()+
   scale_x_log10()+
+  facet_wrap(~round)+
   theme_bw()+
   labs(x = "‰ flowers")
 
@@ -928,13 +991,14 @@ RMO_p9.2 %>%
                      per_mill_flowers > 1 & per_mill_flowers <= 2 ~ "1-2",
                      per_mill_flowers > 2 ~ ">2")) %>% 
   mutate(per_mill_flowers_cat = factor(per_mill_flowers_cat, levels = c("0", "0-1", "1-2", ">2"))) %>% 
-  group_by(per_mill_flowers_cat) %>% 
+  group_by(round, per_mill_flowers_cat) %>% 
   summarise(mean_cl_boot(Richness)) %>% 
-  ggplot(aes(x = per_mill_flowers_cat, y = y, ymin = ymin, ymax = ymax))+
-  geom_pointrange(fatten = 0.5)+
+  ggplot(aes(x = per_mill_flowers_cat, y = y, ymin = ymin, ymax = ymax, colour = round))+
+  geom_pointrange(fatten = 0.5, position = position_dodge(width = 0.2))+
   scale_y_continuous(limits = c(0,NA))+
   theme_bw()+
-  labs(x = "‰ flowers", y = "Richness")
+  labs(x = "‰ flowers", y = "Richness")+
+  scale_color_brewer(palette = "Set1")
 
 ggsave(here("figures", "flower_dens_vs_richness[grouped].pdf"))
 ```
@@ -955,13 +1019,12 @@ RMO_meta %>%
   select(ID, starts_with("perc_veg_")) %>% 
   distinct() %>% 
   group_by(ID) %>% 
-  slice(1) %>%  #if there are double entries for the same segment on the same date we chosse the first
+  dplyr::slice(1) %>%  #if there are double entries for the same segment on the same date we choose the first
   pivot_longer(cols = starts_with("perc_veg_"), names_to = "veg_cat", values_to = "veg_height") %>% 
   group_by(ID) %>% 
-  filter(!all(is.na(veg_height)))
+  filter(!all(is.na(veg_height))) %>% 
   select(ID, date, OBJECTID, SiteID, segment, length,per_mill_flowers, round) %>% 
   distinct() %>% 
- 
   left_join(RMO_spec) %>% 
   pivot_longer(one_of(colnames(RMO_spec[,-1])), names_to = "Species", values_to = "Abundance") %>% 
   group_by(ID) %>% 
@@ -1173,7 +1236,7 @@ ggplot(RMO_13_points, aes(x = MDS1, y = MDS2, colour = County_text))+
 
 ## Vilka parametrar (nektarrikedom, veghöjd…) viktiga för olika arterna?
 
-what env var are important for different species. Vegan correspondance analysis. 
+what env var are important for different species. Vegan correspondence analysis. 
 
 Q: What env variables do we want to include here?
 
